@@ -1,0 +1,95 @@
+{
+  "servers": [
+    {
+      "name": "exa_search",
+      "transport": "streamable_http",
+      "url": "https://mcp.exa.ai/mcp",
+      "allowed_tools": [
+        "web_search_exa"
+      ],
+      "aliases": {
+        "web_search_exa": "web_search"
+      },
+      "timeout_seconds": 20,
+      "max_retries": 0
+    },
+    {
+      "name": "xiaohongshu",
+      "transport": "streamable_http",
+      "url": "http://127.0.0.1:18060/mcp",
+      "allowed_tools": [
+        "search_feeds",
+        "get_feed_detail"
+      ],
+      "timeout_seconds": 90,
+      "max_retries": 1
+    },
+    {
+      "name": "amap_maps",
+      "transport": "streamable_http",
+      "url": "https://mcp.amap.com/mcp?key=${AMAP_MAPS_API_KEY}",
+      "allowed_tools": [
+        "maps_geo",
+        "maps_regeocode",
+        "maps_weather",
+        "maps_direction_bicycling",
+        "maps_direction_walking",
+        "maps_direction_driving",
+        "maps_direction_transit_integrated",
+        "maps_distance",
+        "maps_text_search",
+        "maps_around_search",
+        "maps_search_detail"
+      ],
+      "timeout_seconds": 45,
+      "max_retries": 1
+    },
+    {
+      "name": "china_rail",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "12306-mcp@0.3.10"
+      ],
+      "timeout_seconds": 60,
+      "max_retries": 1
+    },
+    {
+      "name": "google_flights",
+      "transport": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "--locked",
+        "--script",
+        "scripts/fli_mcp_compat.py"
+      ],
+      "allowed_tools": [
+        "search_flights",
+        "search_dates",
+        "search_explore"
+      ],
+      "timeout_seconds": 90,
+      "max_retries": 1
+    },
+    {
+      "name": "booking",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@striderlabs/mcp-booking@0.2.1"
+      ],
+      "allowed_tools": [
+        "booking_search",
+        "booking_get_property",
+        "booking_check_availability",
+        "booking_get_prices",
+        "booking_get_reviews"
+      ],
+      "timeout_seconds": 90,
+      "max_retries": 1
+    }
+  ]
+}

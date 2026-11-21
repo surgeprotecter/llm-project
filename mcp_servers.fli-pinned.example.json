@@ -1,0 +1,13 @@
+{
+  "servers": [
+    {
+      "name": "google_flights",
+      "transport": "stdio",
+      "command": "uv",
+      "args": ["run", "--locked", "--script", "scripts/fli_mcp_compat.py"],
+      "allowed_tools": ["search_flights", "search_dates", "search_explore"],
+      "timeout_seconds": 90,
+      "max_retries": 1
+    }
+  ]
+}

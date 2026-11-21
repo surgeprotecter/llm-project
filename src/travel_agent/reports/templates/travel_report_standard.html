@@ -1,0 +1,120 @@
+{% from 'travel_report_standard.md.j2' import timeline_for, hotel_photos, transport_scope, quality_state, budget_preference, budget_warning with context %}
+{% set quality = namespace() %}{{ quality_state(quality) }}
+{% macro entry_content(entry, labels, alternative=false) -%}
+{% set kind = entry.get('type') or entry.get('kind') or 'activity' %}
+<div class="stop-title">{% if not alternative or entry.get('start_time') %}<time>{{ entry.get('start_time') or '时间待定' }}{% if entry.get('end_time') %}–{{ entry.end_time }}{% endif %}</time>{% endif %}<span class="entry-type">{{ '备选 · ' if alternative else '' }}{{ labels.get(kind, kind if alternative else '体验') }}</span><strong>{{ entry.get('name') or '安排待补充' }}</strong></div>
+{% if entry.get('reason') or not alternative %}<p>{{ entry.get('reason') or '安排理由待补充' }}</p>{% endif %}
+{% if entry.get('duration_minutes') or entry.get('status') %}<p class="entry-meta">{% if entry.get('duration_minutes') %}建议预留{{ entry.duration_minutes|round|int }}分钟{% endif %}{% if entry.get('status') %} <span class="entry-status">{{ {'quote':'已检索报价','sourced':'有来源依据','reference':'参考信息','unavailable':'待补查','verified':'已核验','pending':'待确认','estimate':'道路/规划估算','draft':'草稿','failed':'未通过'}.get(entry.status,entry.status) }}</span>{% endif %}</p>{% endif %}
+{% if entry.get('address') %}<p>{{ entry.address }}</p>{% endif %}
+{% if entry.get('recommended_items') %}<div class="food-tags">{% for item in entry.recommended_items %}<span>{{ item }}</span>{% endfor %}</div>{% endif %}
+{% if entry.get('price_reference') %}<p>费用参考：{{ entry.price_reference }}</p>{% endif %}
+{% if entry.get('location_status') %}<p>{{ entry.location_status }}</p>{% endif %}
+{% set source_url = entry.get('source_url') or entry.get('url') or report.get('source_url') %}
+{% if entry.get('map_url') or source_url %}<p class="entry-links">{% if entry.get('map_url') %}<a href="{{ entry.map_url }}" target="_blank" rel="noopener noreferrer">地图 ↗</a>{% endif %}{% if source_url %}<a href="{{ source_url }}" target="_blank" rel="noopener noreferrer">来源依据 ↗</a>{% endif %}</p>{% endif %}
+{%- endmacro %}
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>{{ '草稿 · ' if quality.failed else '' }}{{ plan.title }}</title>
+<style>{% include 'report_standard.css' %}</style></head><body>
+{% set trip = report.trip %}{% set budget = report.budget %}{% set budget_request = namespace() %}{{ budget_preference(trip.get('budget'), budget_request) }}
+<div class="wrap"><header class="top"><a class="brand" href="#top">ROAM<em>.</em> 旅行计划</a><div class="small"><span class="badge">{{ '草稿 · 待完善' if quality.failed else report.status }}</span>{{ report.generated_at[:10] }}</div></header></div>
+<section class="hero" id="top"><div class="wrap hero-grid"><div><span class="eyebrow">TRAVEL PLAN / {{ trip.duration_days or '待定' }} DAYS</span><h1>{{ plan.destination }}，<br>{{ trip.duration_days or '待定' }}日旅行计划。</h1>{% if quality.failed %}<div class="draft-banner"><strong>草稿 · 质量检查未通过</strong><p>当前方案仍有资料或安排缺口，<a href="#quality-gaps">查看待补齐事项 ↓</a></p></div>{% endif %}<p class="lead">{{ report.summary }}</p><div class="chips"><span class="chip">{{ trip.origin or '出发地待补充' }} → {{ plan.destination }}</span><span class="chip">{{ trip.travel_dates.start_date or '日期待定' }} — {{ trip.travel_dates.end_date or '待定' }}</span><span class="chip">{{ trip.traveler_count or '待定' }}人同行</span><span class="chip">{{ trip.duration_days or '待定' }}天</span>{% if budget_request.specified %}<span class="chip">{{ budget_request.text }}</span>{% endif %}</div><p class="sub">建议游览时刻可调整；交通、酒店均为候选，尚未预订。</p></div>
+<aside class="route"><span class="eyebrow">AT A GLANCE</span><h2>路线，一眼看懂</h2><ol>{% for day in report.days %}<li><b>DAY {{ '%02d'|format(day.day) }}</b><span>{{ day.city }} · {% set route = namespace() %}{{ timeline_for(day, route) }}{% for stop in route.entries %}{{ stop.get('name') or '安排待补充' }}{{ ' → ' if not loop.last else '' }}{% else %}安排待补充{% endfor %}</span></li>{% endfor %}</ol><p>按片区安排，周边一日游结合实际路程；长线按城市连续停留。</p></aside></div></section>
+<div class="wrap">{% if quality.failed %}<section class="quality-gaps" id="quality-gaps" aria-labelledby="quality-gaps-title"><h2 id="quality-gaps-title">草稿待补齐事项</h2><ul>{% for gap in quality.gaps %}<li>{{ (gap.get('message') or gap.get('reason') or gap.get('description') or gap.get('code') or '待补充事项') if gap is mapping else gap }}</li>{% else %}<li>质量检查未通过，具体缺口待补充。</li>{% endfor %}</ul></section>{% endif %}<p class="notice"><b>真实检索与预算估算：</b>景点、餐饮保留笔记依据；路线标注地图来源。报价、经验参考和规划预留逐项注明；价格与库存以来源页面为准。</p>
+{% if (report.get('revision') or {}).get('base_version') %}<div class="revision"><b>基于第{{ report.revision.base_version }}版修改</b> · {{ report.revision.reason }}<br>本轮只补查与修改相关的资料，未更新部分沿用原检索结果和时间。</div>{% endif %}</div>
+<div class="wrap layout"><nav class="nav" aria-label="目录"><span>内容目录</span><a href="#overview">行程概览</a><a href="#days">每日安排</a><a href="#stay">交通与住宿</a><a href="#cost">费用预算</a><a href="#research">笔记整理</a><a href="#todo">出发前确认</a><a href="#sources">信息来源</a></nav><main>
+<section class="section" id="overview"><div class="section-header"><div><span>01 / OVERVIEW</span><h2>先看这趟旅行怎么走</h2></div><p>{{ '长线分段' if (trip.duration_days or 0) >= 7 else '短途与周边' }} · 真实工具检索</p></div><div class="metrics"><div class="metric"><label>行程长度</label><strong>{{ trip.duration_days or '待定' }}天</strong><small>首末日预留交通时间</small></div><div class="metric"><label>游览与体验</label><strong>{{ report.point_count }}个</strong><small>按停留时间与交通安排</small></div><div class="metric"><label>住宿安排</label><strong>{{ report.hotel_regions|length }}段</strong><small>每段只计一间预算基准</small></div><div class="metric"><label>预算状态</label><strong>{{ '区间估算' if budget.get('low') != none else '待补充' }}</strong><small>明确人数与计价范围</small></div></div><p class="summary"><b>规划思路：</b>{{ report.summary }} 已整理 {{ report.notes|length }} 份资料；吃饭、咖啡、购物与体验已纳入每天的时间线；同一时段的备选只需选择一家。</p>{% if weather_lines|default([]) %}<div class="summary weather"><b>天气参考</b><ul>{% for line in weather_lines %}<li>{{ line }}</li>{% endfor %}</ul></div>{% endif %}{% if report.get('route_takeaways') %}<div class="region-tradeoffs"><h3>路线安排</h3><ul>{% for statement in report.route_takeaways %}<li>{{ statement }}</li>{% endfor %}</ul></div>{% endif %}</section>
+<section class="section" id="days"><div class="section-header"><div><span>02 / DAY BY DAY</span><h2>每天怎么安排</h2></div><p>时刻为建议 · 路段标注数据来源</p></div><div class="day-index">{% for day in report.days %}<a href="#day{{ day.day }}">{{ day.date }}<b>第{{ day.day }}天 · {{ day.area }}</b></a>{% endfor %}</div>
+{% for day in report.days %}{% set timeline = namespace() %}{{ timeline_for(day, timeline) }}<article class="day" id="day{{ day.day }}"><header class="day-head"><div><span>DAY {{ '%02d'|format(day.day) }} · {{ day.date }}</span><h3>{{ day.title }}</h3></div><b>{{ timeline.entries|length }}项安排</b></header><div class="day-content"><p class="day-intro">{{ '本日包含游览体验及跨城转移，保留接驳缓冲。' if day.get('type') == 'transfer' and day.get('stops') else day.get('intro') or '' }}</p><ol class="timeline">
+{% for entry in timeline.entries %}<li class="stop" data-entry-type="{{ entry.type }}">{{ entry_content(entry, timeline.labels) }}
+{% if entry.get('alternatives') %}<div class="alternatives"><p class="alternatives-heading">同一时段择一</p><ul>{% for alternative in entry.alternatives %}<li>{% if alternative is mapping %}{{ entry_content(alternative, timeline.labels, true) }}{% else %}<p>{{ alternative }}</p>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+{% set leg = entry.get('route_leg') or {} %}{% if leg %}<span class="transfer">下一景点路段：{{ leg.get('to') or '下一站' }} · {% if leg.get('verified') %}{{ leg.get('km','待定') }}公里 / 约{{ leg.get('minutes','待定') }}分钟{% else %}道路耗时待补查{% endif %}{% if leg.get('source') %} · {{ leg.source }}{% endif %}</span>{% if leg.get('access_note') %}<p>{{ leg.access_note }}</p>{% endif %}{% endif %}</li>{% else %}<li class="stop"><p>当天安排待补充。</p></li>{% endfor %}</ol>
+{% if day.get('timing_warning') %}<p class="notice">{{ day.timing_warning }}</p>{% endif %}{% if day.get('exception_reason') %}<p class="note">{{ day.exception_reason }}</p>{% endif %}<div class="day-foot">{% if day.get('no_hotel') %}当晚未计酒店{% else %}住宿城市：{{ day.get('stay_city') or day.get('city') or '待定' }}{% endif %} · 开放时间、预约要求需出发前核对{% if day.get('available_until') %} · 建议最晚游览至{{ day.available_until }}{% endif %}</div></div></article>{% endfor %}</section>
+<section class="section" id="stay"><div class="section-header"><div><span>03 / STAY & MOVE</span><h2>交通与住宿</h2></div><p>明确方向、人数、晚数及房间数</p></div>
+{% for t in report.get('transport') or [] %}{% set scope = namespace() %}{{ transport_scope(t, scope) }}<div class="card transport-card"><h3>{{ t.get('type') or '交通候选' }} · {{ t.get('origin') or '出发地待定' }} {{ '↔' if scope.round_trip else '→' }} {{ t.get('destination') or '目的地待定' }}</h3><p>{{ scope.date or '日期待定' }} · {{ {'quote':'已检索报价','reference':'参考信息','unavailable':'待补查','verified':'已核验','pending':'待确认','estimate':'道路/规划估算'}.get(t.get('status'),t.get('status') or '候选，待确认') }}{% set source_url = t.get('source_url') or t.get('url') or report.get('source_url') %}{% if source_url %} · <a href="{{ source_url }}" target="_blank" rel="noopener noreferrer">查看来源 ↗</a>{% endif %}</p>{% if t.get('refresh_status') %}<p class="notice">{{ t.refresh_status }}</p>{% endif %}
+{% for o in t.get('options') or [] %}<div class="flight">{% if o is mapping %}{% if o.get('cabin_class') %}<p class="cabin-label">舱位：{{ {'ECONOMY':'经济舱','PREMIUM_ECONOMY':'超级经济舱','BUSINESS':'商务舱','FIRST':'头等舱'}.get(o.cabin_class|upper,o.cabin_class) }}{% if o.get('comfort_preference') %} · 优先舒适{% endif %}</p>{% elif o.get('comfort_preference') %}<p class="cabin-label">优先舒适 · 舱位待核实</p>{% endif %}{% if o.get('directions') %}<span class="label">{{ '行程测算基准' if o.get('baseline') else '备选组合' }}</span>{% for d in o.directions %}<p class="flight-direction"><b>{{ {'outbound':'去程','return':'返程'}.get(d.get('direction'),'行程段') }} · {{ d.get('flight_numbers') or d.get('name') or '班次待定' }}</b><br>{{ d.get('origin') or '待定' }} → {{ d.get('destination') or '待定' }}<br>{{ (d.get('departure_time') or '时刻待定')|replace('T',' ') }} → {{ (d.get('arrival_time') or '时刻待定')|replace('T',' ') }}（各地当地时间）{% if d.get('duration_minutes') %}<br>行程段合计{{ d.duration_minutes }}分钟{% endif %}{% if d.get('stops') is not none %} · {{ d.stops }}次经停{% endif %}</p>{% endfor %}
+{% else %}<p class="flight-direction">{{ o.get('route') or o.get('name') or o.get('train_no') or '交通候选' }}{% if o.get('durationText') or o.get('duration') %} · {{ o.get('durationText') or o.duration }}{% elif o.get('duration_minutes') %} · 约{{ o.duration_minutes|round|int }}分钟{% endif %}</p>{% if o.get('planning_duration_minutes') %}<p>排程预留约{{ o.planning_duration_minutes|round|int }}分钟 · {{ o.planning_duration_basis }}</p>{% endif %}{% if o.get('planning_departure_time') or o.get('departure_time') or o.get('arrival_time') %}<p>{{ o.get('planning_departure_time') or o.get('departure_time') or '出发时刻待定' }} → {{ o.get('planning_arrival_time') or o.get('arrival_time') or '抵达时刻待定' }}</p>{% if o.get('planning_time_basis') %}<p class="note">{{ o.planning_time_basis }}</p>{% endif %}{% endif %}{% endif %}
+{% set price = o.get('per_person_price',o.get('price',o.get('estimated_price'))) %}<p class="price">{% if price is not none %}每人{{ '往返' if scope.round_trip else '单程' }}参考 {{ price }} {{ o.get('currency') or '' }}{% if o.get('group_estimated_price') is not none %} · {{ o.get('requested_passengers') or trip.traveler_count or '待定' }}人{{ '合计参考' if o.get('group_price_is_quote') else '估算' }} {{ o.group_estimated_price }} {{ o.get('currency') or '' }}{% endif %}{% else %}该候选暂无可用票价{% endif %}</p>
+{% if o.get('price_basis') or o.get('group_price_basis') %}<p>{{ {'per_person':'每人单程参考价','per_group':'全体单程参考价','per_vehicle':'每车单程参考价','unknown':'计价单位待核实'}.get(o.get('price_basis'),o.get('price_basis') or '') }}{% if o.get('group_price_basis') %} · {{ o.group_price_basis }}{% endif %}</p>{% endif %}{% if o.get('baggage') %}<p>{{ o.baggage }}</p>{% endif %}{% if o.get('raw_summary') %}<p>{{ o.raw_summary }}</p>{% endif %}{% if o.get('status') %}<p>{{ {'quote':'实查报价，库存未锁定','reference':'来源参考，非实时库存','estimate':'道路估算，不代表已查到可订班次','unavailable':'尚待核实'}.get(o.status,o.status) }}</p>{% endif %}{% if o.get('source_url') or o.get('url') %}<p><a href="{{ o.get('source_url') or o.url }}" target="_blank" rel="noopener noreferrer">候选来源 ↗</a></p>{% endif %}{% if o.get('fetched_at') %}<p class="quote-time">检索时间：{{ o.fetched_at }}</p>{% endif %}{% else %}<p>{{ o }}</p>{% endif %}</div>{% else %}<p class="note">交通方案待补充。</p>{% endfor %}{% if t.get('raw_summary') %}<p>{{ t.raw_summary }}</p>{% endif %}{% if t.get('duration_minutes') %}<p>行程参考耗时：{{ t.duration_minutes }}分钟</p>{% endif %}{% for item in budget.get('items',[]) if item.label.startswith((t.get('origin') or '') ~ ' → ' ~ (t.get('destination') or '')) %}<p class="price">本段测算：全体 {{ item.low }}–{{ item.high }} {{ item.currency }} · 每人约 {{ (item.low / (trip.traveler_count or 1))|round|int }}–{{ (item.high / (trip.traveler_count or 1))|round|int }} {{ item.currency }}</p><p class="note">{{ item.status }} · {{ item.basis }}</p>{% endfor %}{% if t.get('fetched_at') %}<p class="quote-time">原检索时间：{{ t.fetched_at }}</p>{% endif %}</div>{% endfor %}
+{% for g in report.get('hotel_regions') or [] %}{% set region_index = loop.index %}<h3 style="font-size:17px;margin:24px 0 5px">{{ g.city }}住宿候选</h3><p class="note">{{ g.checkin or '入住待定' }} — {{ g.checkout or '退房待定' }} · {{ g.nights or '待定' }}晚 · {{ trip.traveler_count }}人</p>{% if g.get('refresh_status') %}<p class="notice">{{ g.refresh_status }}</p>{% endif %}<div class="cards" style="margin-top:12px">{% for h in g.get('hotels') or [] %}<div class="card {{ 'selected' if h.baseline else '' }}">{% set photos = namespace() %}{{ hotel_photos(h, photos) }}{% if photos.photos %}{% set gallery_id = 'hotel-gallery-' ~ region_index ~ '-' ~ loop.index %}<div class="hotel-gallery" data-hotel-gallery role="region" aria-roledescription="轮播图" aria-label="{{ h.get('name') or '酒店' }}酒店照片" aria-describedby="{{ gallery_id }}-help" tabindex="0"><p class="sr-only" id="{{ gallery_id }}-help">使用左右方向键切换照片，Home 和 End 键查看首张和末张；触屏可左右滑动。</p><div class="hotel-slides" id="{{ gallery_id }}-slides">{% for photo in photos.photos %}<figure class="hotel-slide" role="group" aria-roledescription="幻灯片" aria-label="{{ loop.index }} / {{ photos.photos|length }}"><img class="hotel-image" src="{{ photo.url }}" alt="{{ photo.alt or ((h.get('name') or '酒店') ~ '酒店照片 ' ~ loop.index) }}" loading="lazy" decoding="async" referrerpolicy="no-referrer"></figure>{% endfor %}</div><div class="gallery-controls" hidden><button class="gallery-arrow" type="button" data-gallery-prev aria-label="上一张酒店照片" aria-controls="{{ gallery_id }}-slides">←</button><div class="gallery-dots" aria-label="选择酒店照片">{% for photo in photos.photos %}<button type="button" class="gallery-dot" aria-label="查看第{{ loop.index }}张酒店照片" aria-controls="{{ gallery_id }}-slides" data-gallery-dot><span class="sr-only">{{ loop.index }}</span></button>{% endfor %}</div><span class="gallery-count" aria-live="polite" aria-atomic="true">1 / {{ photos.photos|length }}</span><button class="gallery-arrow" type="button" data-gallery-next aria-label="下一张酒店照片" aria-controls="{{ gallery_id }}-slides">→</button></div><p class="gallery-unavailable" hidden>酒店照片暂不可用，请查看酒店来源页面。</p></div>{% endif %}<h3>{{ h.name }} <span class="label">{{ '预算基准' if h.baseline else '备选' }}</span></h3><p>{{ h.location }} · {{ h.get('rooms',1) }}间房 · {{ h.get('adults',trip.traveler_count) }}人</p><div class="meta"><span>评分 {{ h.rating or '未返回' }}</span></div>
+{% if h.get('price_is_total') and h.get('total_price') is not none %}<p class="price">{{ h.total_price }} {{ h.currency }} / 全部入住总价</p><p>折合每间每晚 {{ h.nightly_price }} {{ h.currency }} · {{ g.nights }}晚、{{ h.rooms }}间</p>{% else %}<p>搜索卡片原文：{{ h.get('display_price','未返回') }} · 计价周期/币种未完整核实</p><p>该展示价不直接作为入住总额；预算表另列住宿规划预留。</p>{% endif %}<p class="note">{{ h.price_note }} · {{ h.get('tax_note','税费范围待复核') }}</p><ul>{% for p in h.get('pros') or [] %}<li>优势：{{ p }}</li>{% endfor %}{% for c in h.get('cons') or [] %}<li>取舍：{{ c }}</li>{% endfor %}</ul>{% set hotel_url = h.get('source_url') or h.get('url') %}{% if hotel_url %}<a href="{{ hotel_url }}" target="_blank" rel="noopener noreferrer">查看酒店详情 ↗</a>{% endif %}<p class="quote-time">{{ h.get('fetched_at','') }}</p></div>{% endfor %}</div>{% endfor %}</section>
+<section class="section" id="cost"><div class="section-header"><div><span>04 / BUDGET</span><h2>钱花在哪里</h2></div><p>报价、经验估算、规划预留分别标注</p></div><div class="budget"><div><table><thead><tr><th>项目</th><th>测算依据</th><th>全体金额</th></tr></thead><tbody>{% for item in budget['items'] %}<tr><td>{{ item.category }}<br><small>{{ item.label }}</small></td><td>{{ item.basis }}{% if item.url %}<br><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">来源 ↗</a>{% endif %}</td><td class="cost-range">{% if item.get('low') != none %}{{ item.low }}{% if item.low != item.high %}–{{ item.high }}{% endif %} {{ item.currency }}{% elif item.amount != none %}{{ item.amount }} {{ item.currency }}{% else %}待估算{% endif %}<span>{{ item.status }}</span></td></tr>{% endfor %}</tbody></table><p class="note">每段只计预算基准酒店；备选酒店不重复计费。规划预留是支出假设，不代表商家报价。</p>{% if budget.get('fx') %}<p class="note">汇率来源：<a href="{{ budget.fx.source_url }}">ExchangeRate-API</a> · {{ budget.fx.updated_at or '本轮未取得汇率，相关费用使用规划预留' }}</p>{% endif %}</div><aside class="total"><span>{{ trip.traveler_count }}人行程预算估算</span><strong>{% if budget.get('low') != none %}{{ budget.low }}–{{ budget.high }}<br><small>{{ budget.currency }}</small>{% else %}待补充{% endif %}</strong><p>{{ budget.reason }}</p>{% set notice = budget_warning(budget, budget_request) %}{% if notice %}<p class="notice">{{ notice }}</p>{% endif %}{% if budget.get('per_person_low') != none %}<hr><p>每人 {{ budget.per_person_low }}–{{ budget.per_person_high }} {{ budget.currency }}</p>{% endif %}<hr><p>{{ budget_request.text }}</p>{% if budget.get('remaining_low') is not none and (trip.get('budget') or {}).get('amount') is not none %}<p>预算结余区间 {{ budget.remaining_low }}–{{ budget.remaining_high }} {{ budget.currency }}（负数表示超出）</p>{% endif %}</aside></div></section>
+<section class="section" id="research"><div class="section-header"><div><span>05 / RESEARCH</span><h2>从笔记里整理出的建议</h2></div><p>保留来源 · 合并重复观点</p></div>{% for insight in report.insights %}<div class="insight"><b>{{ insight.title }}</b><div><p>{{ insight.text }}</p><p>{% for n in report.notes if n.id in insight.note_ids %}<a href="{{ n.url }}" target="_blank" rel="noopener noreferrer">{{ n.title }} ↗</a> {% endfor %}</p></div></div>{% endfor %}</section>
+<section class="section" id="todo"><div class="section-header"><div><span>06 / BEFORE YOU GO</span><h2>出发前还要确认</h2></div></div><div class="checks">{% for item in report.confirmations %}<div class="check"><b>{{ '%02d'|format(loop.index) }} · 待确认</b>{{ item }}</div>{% endfor %}</div>{% if report.warnings %}<details style="margin-top:15px"><summary>检索与规划提示（{{ report.warnings|length }}项）</summary><ul class="note">{% for w in report.warnings %}<li>{{ w }}</li>{% endfor %}</ul></details>{% endif %}</section>
+<section class="section sources" id="sources"><div class="section-header"><div><span>07 / SOURCES</span><h2>信息来源</h2></div></div>{% for n in report.notes %}<details><summary>{{ n.title }} · {{ n.get('source') or '小红书正文' }}</summary><p>{{ n.content[:700] }}</p><a href="{{ n.url }}" target="_blank" rel="noopener noreferrer">打开原笔记 ↗</a></details>{% endfor %}<details><summary>工具检索记录与时间（含继承来源）</summary><ul>{% for s in report.sources %}<li>{{ s.tool }} · {{ '成功' if s.success else '未成功' }} · {{ s.fetched_at }}</li>{% endfor %}</ul></details>{% if (report.get('region') or {}).get('country_code') != 'CN' %}<p>地图数据 © OpenStreetMap contributors · Photon / komoot · OSRM，道路模型耗时不含实时交通。</p>{% endif %}</section>
+</main></div><footer class="footer">ROAM. 旅行计划 · 真实检索与明确估算 · 候选方案尚未预订</footer><script>
+// Progressive enhancement: without JavaScript all sourced photos remain visible.
+(() => {
+  document.querySelectorAll('[data-hotel-gallery]').forEach(gallery => {
+    let slides = [...gallery.querySelectorAll('.hotel-slide')];
+    const allSlides = [...slides];
+    const dots = [...gallery.querySelectorAll('[data-gallery-dot]')];
+    const controls = gallery.querySelector('.gallery-controls');
+    const previous = gallery.querySelector('[data-gallery-prev]');
+    const next = gallery.querySelector('[data-gallery-next]');
+    const dotList = gallery.querySelector('.gallery-dots');
+    const count = gallery.querySelector('.gallery-count');
+    let index = 0;
+    const show = position => {
+      const total = slides.length;
+      index = total ? (position + total) % total : 0;
+      allSlides.forEach(slide => { slide.hidden = slide !== slides[index]; });
+      const visibleImage = slides[index]?.querySelector('img');
+      if (visibleImage) visibleImage.loading = 'eager';
+      dots.forEach((dot, originalIndex) => {
+        const position = slides.indexOf(allSlides[originalIndex]);
+        dot.hidden = position < 0;
+        dot.setAttribute('aria-current', position === index ? 'true' : 'false');
+        if (position >= 0) {
+          dot.setAttribute('aria-label', `查看第${position + 1}张，共${total}张酒店照片`);
+          allSlides[originalIndex].setAttribute('aria-label', `${position + 1} / ${total}`);
+        }
+      });
+      count.textContent = total ? `${index + 1} / ${total}` : '0 / 0';
+      controls.hidden = !total;
+      previous.hidden = next.hidden = dotList.hidden = total < 2;
+      gallery.querySelector('.gallery-unavailable').hidden = !!total;
+      gallery.tabIndex = total > 1 ? 0 : -1;
+    };
+    gallery.classList.add('is-ready');
+    allSlides.forEach((slide, originalIndex) => {
+      const image = slide.querySelector('img');
+      const discard = () => {
+        const current = slides[index];
+        const focused = gallery.contains(document.activeElement);
+        slides = slides.filter(candidate => candidate !== slide);
+        show(Math.max(0, slides.indexOf(current)));
+        // Avoid leaving keyboard focus in a now-hidden dot.
+        if (focused && (!gallery.contains(document.activeElement) || document.activeElement.closest('[hidden]'))) gallery.focus();
+      };
+      image.addEventListener('error', discard, {once:true});
+      if (image.complete && !image.naturalWidth) discard();
+      dots[originalIndex].addEventListener('click', () => show(slides.indexOf(slide)));
+    });
+    previous.addEventListener('click', () => show(index - 1));
+    next.addEventListener('click', () => show(index + 1));
+    gallery.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey || slides.length < 2) return;
+      const target = {ArrowLeft:index - 1, ArrowRight:index + 1, Home:0, End:slides.length - 1}[event.key];
+      if (target === undefined) return;
+      event.preventDefault();
+      show(target);
+    });
+    let gesture;
+    gallery.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'mouse' || event.target.closest('button')) return;
+      gesture = {id:event.pointerId, x:event.clientX, y:event.clientY};
+      gallery.setPointerCapture(event.pointerId);
+    });
+    gallery.addEventListener('pointercancel', () => { gesture = undefined; });
+    gallery.addEventListener('pointerup', event => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      const dx = event.clientX - gesture.x;
+      const dy = event.clientY - gesture.y;
+      gesture = undefined;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.3) show(index + (dx < 0 ? 1 : -1));
+    });
+    show(0);
+  });
+})();
+</script>
+</body></html>

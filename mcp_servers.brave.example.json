@@ -1,0 +1,32 @@
+{
+  "servers": [
+    {
+      "name": "brave_search",
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@brave/brave-search-mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+      },
+      "allowed_tools": [
+        "brave_web_search"
+      ],
+      "aliases": {
+        "brave_web_search": "web_search"
+      },
+      "phases": [
+        "destination_discovery",
+        "known_destination"
+      ],
+      "timeout_seconds": 30,
+      "max_retries": 1,
+      "risk_level": "read",
+      "freshness_ttl_seconds": 900
+    }
+  ]
+}

@@ -1,0 +1,229 @@
+{# Shared data-only macros keep HTML and Markdown compatibility rules aligned. #}
+{%- macro timeline_for(day, result) -%}
+  {%- set result.entries = [] -%}
+  {%- set result.legacy = not day.get('timeline') -%}
+  {%- set result.labels = {'sightseeing':'游览', 'meal':'用餐', 'cafe':'咖啡', 'shop':'购物', 'activity':'体验', 'transfer':'交通', 'free_time':'自由时间', 'friend_time':'会友'} -%}
+  {%- set primary = day.get('timeline') or day.get('stops') or [] -%}
+  {%- for item in primary if item is mapping -%}
+    {%- set kind = item.get('type') or ('sightseeing' if result.legacy else 'activity') -%}
+    {%- set kind = kind if kind in result.labels else 'activity' -%}
+    {%- set legs = day.get('legs') or [] -%}
+    {%- set route = namespace(leg=legs[loop.index0] if result.legacy and loop.index0 < legs|length else {}) -%}
+    {# Route legs still refer to primary stops, not meals or their alternatives. #}
+    {%- if not result.legacy and legs -%}
+      {%- for stop in day.get('stops') or [] if stop is mapping -%}
+        {%- if loop.index0 < legs|length and ((item.get('id') and item.get('id') == stop.get('id')) or (item.get('name') and item.get('name') == stop.get('name'))) -%}
+          {%- set route.leg = legs[loop.index0] -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+    {%- set result.entries = result.entries + [dict(item, type=kind, route_leg=route.leg, sort_time=item.get('start_time') or '99:99')] -%}
+  {%- endfor -%}
+  {%- if result.legacy -%}
+    {%- for food in day.get('food') or [] -%}
+      {%- set match = namespace(item=food if food is mapping else {'name':food}) -%}
+      {%- for candidate in report.get('food') or [] if candidate is mapping and candidate.get('name') == match.item.get('name') -%}
+        {%- set match.item = dict(candidate, **match.item) -%}
+      {%- endfor -%}
+      {%- set kind = match.item.get('type') or ('cafe' if match.item.get('kind') in ['咖啡','咖啡馆','cafe','coffee'] else 'meal') -%}
+      {%- set kind = kind if kind in result.labels else 'meal' -%}
+      {%- if match.item.get('name') and match.item.get('name') not in result.entries|map(attribute='name')|list -%}
+        {%- set result.entries = result.entries + [dict(match.item, type=kind, sort_time=match.item.get('start_time') or '99:99')] -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set result.entries = result.entries|sort(attribute='sort_time') -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro hotel_photos(hotel, result) -%}
+  {%- set result.photos = [] -%}
+  {%- set result.keys = [] -%}
+  {# Use the legacy image only if the array contains no usable photo. #}
+  {%- for batch in [hotel.get('images') or [], [hotel.get('image_url')]] if not result.photos -%}
+    {%- set batch = [batch] if batch is string else batch -%}
+    {%- for photo in batch -%}
+      {%- set url = (photo.get('url') or photo.get('src') or photo.get('image_url') or '') if photo is mapping else photo -%}
+      {%- if url is string -%}
+        {%- set url = url|trim -%}
+        {%- set key = url.split('#')[0] -%}
+        {%- if '/xdata/images/hotel/' in key -%}
+          {%- set key = key.split('?')[0].split('/')[-1].split('.')[0] -%}
+        {%- endif -%}
+        {%- if (url.startswith('https://') or url.startswith('http://')) and key not in result.keys -%}
+          {%- set result.photos = result.photos + [{'url':url, 'alt':photo.get('alt') if photo is mapping else ''}] -%}
+          {%- set result.keys = result.keys + [key] -%}
+        {%- endif -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endfor -%}
+{%- endmacro -%}
+
+{%- macro transport_scope(transport, result) -%}
+  {%- set result.date = transport.get('date') -%}
+  {%- for option in transport.get('options') or [] if option is mapping and option.get('baseline') and option.get('planning_departure_date') -%}
+    {%- set result.date = option.planning_departure_date -%}
+  {%- endfor -%}
+  {%- set result.round_trip = transport.get('round_trip') == true or transport.get('trip_type') == 'round_trip' -%}
+  {%- if transport.get('round_trip') is none and transport.get('trip_type') != 'one_way' -%}
+    {%- for option in transport.get('options') or [] if option is mapping -%}
+      {%- set directions = option.get('directions') or [] -%}
+      {%- if directions|selectattr('direction', 'equalto', 'outbound')|list and directions|selectattr('direction', 'equalto', 'return')|list -%}
+        {%- set result.round_trip = true -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro budget_preference(value, result) -%}
+  {%- set value = value or {} -%}
+  {%- set currency = value.get('currency') or '' -%}
+  {%- set result.cap = value.get('max_amount') if value.get('max_amount') is not none else value.get('amount') -%}
+  {%- set result.specified = true -%}
+  {%- if value.get('amount') is not none -%}
+    {%- set result.text = '全体目标预算 ' ~ value.amount ~ ' ' ~ currency -%}
+  {%- elif value.get('min_amount') is not none and value.get('max_amount') is not none -%}
+    {%- set result.text = '全体预算范围 ' ~ value.min_amount ~ '–' ~ value.max_amount ~ ' ' ~ currency -%}
+  {%- elif value.get('min_amount') is not none -%}
+    {%- set result.text = '全体预算下限 ≥ ' ~ value.min_amount ~ ' ' ~ currency ~ ' · 未设上限' -%}
+  {%- elif value.get('max_amount') is not none -%}
+    {%- set result.text = '全体预算上限 ≤ ' ~ value.max_amount ~ ' ' ~ currency -%}
+  {%- else -%}
+    {%- set result.text = '全体目标预算待补充' -%}
+    {%- set result.specified = false -%}
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro budget_warning(budget, preference) -%}
+  {%- if preference.cap is not none and budget.get('high') is not none and budget.high > preference.cap -%}
+    {{ '预计超出' if budget.low > preference.cap else '估算上限可能超出' }}预算 {{ preference.cap|round|int }} {{ budget.currency }}。
+  {%- endif -%}
+{%- endmacro -%}
+
+{%- macro quality_state(result) -%}
+  {%- set quality = report.get('quality') or {} -%}
+  {%- set result.failed = quality.get('failed') or quality.get('passed') == false or report.get('status') in ['draft','草稿'] -%}
+  {%- set result.gaps = quality.get('gaps') or quality.get('issues') or [] -%}
+  {%- if not result.gaps and quality.get('failed') is sequence and quality.get('failed') is not string -%}
+    {%- set result.gaps = quality.get('failed') -%}
+  {%- endif -%}
+  {%- if result.gaps is string -%}{%- set result.gaps = [result.gaps] -%}{%- endif -%}
+{%- endmacro -%}
+{%- set quality = namespace() -%}{{ quality_state(quality) }}
+{%- set budget_request = namespace() -%}{{ budget_preference(report.trip.get('budget'), budget_request) }}
+# {{ plan.title }}
+{% if quality.failed %}
+> **草稿 · 质量检查未通过**：以下缺口仍需补齐。
+{% for gap in quality.gaps %}
+- {{ (gap.get('message') or gap.get('reason') or gap.get('description') or gap.get('code') or '待补充事项') if gap is mapping else gap }}
+{% else %}
+- 质量检查未通过，具体缺口待补充。
+{% endfor %}
+{% endif %}
+{{ report.summary }}
+
+{% if report.get('route_takeaways') %}
+路线安排：
+{% for statement in report.route_takeaways %}
+- {{ statement }}
+{% endfor %}{% endif %}
+
+{{ report.trip.travel_dates.start_date or '日期待定' }} 至 {{ report.trip.travel_dates.end_date or '待定' }} · {{ report.trip.traveler_count or '待定' }}人 · {{ budget_request.text }}
+{% if (report.get('revision') or {}).get('base_version') %}
+基于第{{ report.revision.base_version }}版修改：{{ report.revision.reason }}。
+{% endif %}
+## 每日安排
+{% for day in report.days %}
+{% set timeline = namespace() %}{{ timeline_for(day, timeline) }}
+### 第{{ day.day }}天 · {{ day.date }} · {{ day.title }}
+
+{{ day.get('intro') or '' }}
+{% for entry in timeline.entries %}
+- {{ entry.get('start_time') or '时间待定' }}{% if entry.get('end_time') %}–{{ entry.end_time }}{% endif %} · {{ timeline.labels[entry.type] }} · **{{ entry.get('name') or '安排待补充' }}**：{{ entry.get('reason') or '安排理由待补充' }}{% if entry.get('duration_minutes') %} · 建议预留{{ entry.duration_minutes|round|int }}分钟{% endif %}。
+{% if entry.get('status') %}  状态：{{ entry.status }}。
+{% endif %}{% if entry.get('address') %}  地址：{{ entry.address }}。
+{% endif %}{% if entry.get('price_reference') %}  费用参考：{{ entry.price_reference }}。
+{% endif %}{% if entry.get('recommended_items') %}  推荐：{{ entry.recommended_items|join('、') }}。
+{% endif %}{% if entry.get('location_status') %}  {{ entry.location_status }}。
+{% endif %}{% if entry.get('map_url') %}  [地图]({{ entry.map_url }})
+{% endif %}{% set source_url = entry.get('source_url') or entry.get('url') or report.get('source_url') %}{% if source_url %}  [来源依据]({{ source_url }})
+{% endif %}{% for alternative in entry.get('alternatives') or [] %}
+  - 备选（同一时段择一）：{% if alternative is mapping %}{{ alternative.get('name') or '候选待补充' }}{% if alternative.get('type') or alternative.get('kind') %} · {{ timeline.labels.get(alternative.get('type') or alternative.kind,alternative.get('kind') or '体验') }}{% endif %}{% if alternative.get('reason') %} · {{ alternative.reason }}{% endif %}{% if alternative.get('recommended_items') %} · 推荐{{ alternative.recommended_items|join('、') }}{% endif %}{% if alternative.get('start_time') %} · {{ alternative.start_time }}{% endif %}{% if alternative.get('end_time') %}–{{ alternative.end_time }}{% endif %}{% if alternative.get('duration_minutes') %} · {{ alternative.duration_minutes }}分钟{% endif %}{% if alternative.get('price_reference') %} · {{ alternative.price_reference }}{% endif %}{% if alternative.get('status') %} · {{ alternative.status }}{% endif %}{% if alternative.get('map_url') %} · [地图]({{ alternative.map_url }}){% endif %}{% set source_url = alternative.get('source_url') or alternative.get('url') or report.get('source_url') %}{% if source_url %} · [来源依据]({{ source_url }}){% endif %}{% else %}{{ alternative }}{% endif %}
+{% endfor %}{% set leg = entry.get('route_leg') or {} %}{% if leg %}  下一景点路段：{{ leg.get('to') or '下一站' }} · {% if leg.get('verified') %}{{ leg.get('km','待定') }}公里，约{{ leg.get('minutes','待定') }}分钟{% else %}道路耗时待补查{% endif %}{% if leg.get('source') %} · {{ leg.source }}{% endif %}。
+{% if leg.get('access_note') %}  {{ leg.access_note }}
+{% endif %}{% endif %}{% else %}
+- 当天安排待补充。
+{% endfor %}
+{% if day.get('no_hotel') %}当晚未计酒店。{% else %}住宿城市：{{ day.get('stay_city') or day.get('city') or '待定' }}。{% endif %}
+{% if day.get('timing_warning') %}{{ day.timing_warning }}{% endif %}
+{% if day.get('exception_reason') %}{{ day.exception_reason }}{% endif %}
+{% endfor %}
+## 交通候选
+{% for t in report.get('transport') or [] %}
+{% set scope = namespace() %}{{ transport_scope(t, scope) }}
+### {{ t.get('type') or '交通候选' }} · {{ t.get('origin') or '出发地待定' }} {{ '↔' if scope.round_trip else '→' }} {{ t.get('destination') or '目的地待定' }}
+
+{{ scope.date or '日期待定' }} · 状态：{{ t.get('status') or '候选，待确认' }}
+{% if t.get('refresh_status') %}{{ t.refresh_status }}
+{% endif %}{% for option in t.get('options') or [] %}{% if option is mapping %}{% if option.get('cabin_class') %}
+舱位：{{ {'ECONOMY':'经济舱','PREMIUM_ECONOMY':'超级经济舱','BUSINESS':'商务舱','FIRST':'头等舱'}.get(option.cabin_class|upper,option.cabin_class) }}{% if option.get('comfort_preference') %} · 优先舒适{% endif %}。
+{% elif option.get('comfort_preference') %}优先舒适 · 舱位待核实。
+{% endif %}{% if option.get('directions') %}{% for d in option.directions %}
+- {{ {'outbound':'去程','return':'返程'}.get(d.get('direction'),'行程段') }}：{{ d.get('flight_numbers') or d.get('name') or '班次待定' }}，{{ d.get('origin') or '待定' }} → {{ d.get('destination') or '待定' }}，{{ d.get('departure_time') or '时刻待定' }} → {{ d.get('arrival_time') or '时刻待定' }}（各地当地时间）{% if d.get('duration_minutes') %} · {{ d.duration_minutes }}分钟{% endif %}。
+{% endfor %}
+{% else %}
+- {{ option.get('route') or option.get('name') or option.get('train_no') or '交通候选' }}{% if option.get('durationText') or option.get('duration') %} · {{ option.get('durationText') or option.duration }}{% endif %}
+{% endif %}{% if option.get('planning_departure_time') %}  计划接送：{{ option.planning_departure_date }} {{ option.planning_departure_time }} → {{ option.planning_arrival_date }} {{ option.planning_arrival_time }}；{{ option.get('planning_time_basis') or '道路耗时估算，非公共交通班次' }}。
+{% endif %}{% set price = option.get('per_person_price', option.get('price',option.get('estimated_price'))) %}{% if price is not none %}  每人{{ '往返' if scope.round_trip else '单程' }}参考 {{ price }} {{ option.get('currency') or '' }}{% if option.get('group_estimated_price') is not none %}；{{ option.get('requested_passengers') or report.trip.traveler_count or '待定' }}人{{ '合计参考' if option.get('group_price_is_quote') else '估算' }} {{ option.group_estimated_price }} {{ option.get('currency') or '' }}{% endif %}。
+{% else %}  未取得可用票价。
+{% endif %}{% if option.get('price_basis') %}  {{ option.price_basis }}。
+{% endif %}{% if option.get('group_price_basis') %}  {{ option.group_price_basis }}。
+{% endif %}{% if option.get('duration_minutes') %}  参考耗时：{{ option.duration_minutes }}分钟。
+{% endif %}{% if option.get('raw_summary') %}  {{ option.raw_summary }}
+{% endif %}{% if option.get('baggage') %}  {{ option.baggage }}。
+{% endif %}{% if option.get('status') %}  状态：{{ option.status }}。
+{% endif %}{% if option.get('source_url') or option.get('url') %}  [候选来源]({{ option.get('source_url') or option.url }})
+{% endif %}{% else %}
+- {{ option }}
+{% endif %}{% else %}
+- 交通方案待补充。
+{% endfor %}
+{{ t.get('raw_summary') or '' }}
+{% if t.get('duration_minutes') %}参考耗时：{{ t.duration_minutes }}分钟。
+{% endif %}{% set source_url = t.get('source_url') or t.get('url') or report.get('source_url') %}{% if source_url %}[查询来源]({{ source_url }}) · {% endif %}原检索时间：{{ t.get('fetched_at') or '未记录' }}。
+{% else %}
+交通候选待补充。
+{% endfor %}
+## 住宿候选
+{% for g in report.get('hotel_regions') or [] %}
+### {{ g.get('city') or '住宿城市待定' }} · {{ g.get('checkin') or '入住待定' }} 至 {{ g.get('checkout') or '退房待定' }} · {{ g.get('nights') or '待定' }}晚
+{% for h in g.get('hotels') or [] %}
+{% set photos = namespace() %}{{ hotel_photos(h, photos) }}
+- {% if h.get('url') %}[{{ h.get('name') or '酒店候选' }}]({{ h.url }}){% else %}{{ h.get('name') or '酒店候选' }}{% endif %} · {{ '预算基准' if h.get('baseline') else '备选' }} · {{ h.get('rooms') or '待定' }}间房、{{ h.get('adults') or report.trip.traveler_count or '待定' }}人。
+  {% if h.get('price_is_total') and h.get('total_price') is not none %}入住总价 {{ h.total_price }} {{ h.get('currency') or '' }}{% if h.get('nightly_price') is not none %}；折合每间每晚 {{ h.nightly_price }} {{ h.get('currency') or '' }}{% endif %}。{% else %}卡片原文 {{ h.get('display_price') or '未返回' }}，币种/计价周期未完整核验，预算使用明确预留。{% endif %}
+{% if h.get('pros') %}  优势：{{ h.pros|join('；') }}。
+{% endif %}{% if h.get('cons') %}  取舍：{{ h.cons|join('；') }}。
+{% endif %}{% for photo in photos.photos %}  [酒店照片 {{ loop.index }}/{{ photos.photos|length }}]({{ photo.url }})
+{% endfor %}{% endfor %}{% endfor %}
+## 预算估算
+
+{% if report.budget.get('low') is not none %}全体 **{{ report.budget.low }}–{{ report.budget.high }} {{ report.budget.currency }}**{% if report.budget.get('per_person_low') is not none %}；每人 **{{ report.budget.per_person_low }}–{{ report.budget.per_person_high }} {{ report.budget.currency }}**{% endif %}。{% else %}预算待补充。{% endif %}
+{{ budget_warning(report.budget, budget_request) }}
+
+| 分项 | 全体估算范围 | 测算依据 |
+| --- | --- | --- |
+{% for item in report.budget.get('items') or [] %}| {{ item.category }} · {{ item.label }} | {% if item.get('low') is not none %}{{ item.low }}–{{ item.high }} {{ item.currency }}{% elif item.get('amount') is not none %}{{ item.amount }} {{ item.currency }}{% else %}待估算{% endif %} | {{ item.status }}：{{ item.basis }} |
+{% endfor %}
+{{ report.budget.reason }}
+
+## 笔记整理
+{% for insight in report.get('insights') or [] %}
+- **{{ insight.title }}**：{{ insight.text }}
+{% endfor %}
+## 出发前确认
+{% for item in report.get('confirmations') or [] %}
+- {{ item }}
+{% endfor %}
+## 检索与规划提示
+{% for item in report.get('warnings') or [] %}
+- {{ item }}
+{% endfor %}

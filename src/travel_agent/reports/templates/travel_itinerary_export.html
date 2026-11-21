@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    {% include 'report_standard.css' %}
+    .itinerary-export { max-width: 880px; margin: 0 auto; padding: 24px clamp(16px, 5vw, 55px) 70px; overflow-wrap: anywhere; }
+    .itinerary-export h1, .itinerary-export h2, .itinerary-export h3 { line-height: 1.25; margin: 1.3em 0 .6em; }
+    .itinerary-export h1 { font-size: clamp(1.8rem, 4vw, 2.7rem); }
+    .itinerary-export p, .itinerary-export li { line-height: 1.65; }
+    .itinerary-export table { display: block; overflow-x: auto; }
+    .itinerary-export th, .itinerary-export td { padding: .65em; text-align: left; }
+  </style>
+</head>
+<body>
+  <main class="itinerary-export">
+    <p class="small">由已保存的行程导出 · 原有报价和估算沿用</p>
+    {% if show_title %}<h1>{{ title }}</h1>{% endif %}
+    {{ body | safe }}
+  </main>
+</body>
+</html>

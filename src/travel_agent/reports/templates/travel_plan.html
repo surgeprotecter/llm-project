@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ plan.title }}</title>
+  <style>
+    body { max-width: 920px; margin: 40px auto; padding: 0 24px; color: #233044; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }
+    h1 { color: #0b5c75; border-bottom: 2px solid #b8dce5; padding-bottom: 12px; }
+    h2 { color: #0b5c75; margin-top: 32px; }
+    h3 { color: #347a82; }
+    .summary, .warning { padding: 16px; border-radius: 10px; background: #eef7f8; }
+    .warning { background: #fff7e6; }
+    .meta { color: #637083; }
+    .card { border: 1px solid #dce7eb; border-radius: 10px; padding: 16px; margin: 12px 0; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <h1>{{ plan.title }}</h1>
+  <p class="summary">{{ plan.summary }}</p>
+  {% if plan.destination %}<p class="meta">目的地：{{ plan.destination }}</p>{% endif %}
+
+  {% if plan.assumptions %}
+  <h2>规划假设</h2>
+  <ul>{% for item in plan.assumptions %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if weather_lines %}
+  <h2>天气参考</h2>
+  <ul>{% for item in weather_lines %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <h2>每日行程</h2>
+  {% for day in plan.itinerary %}
+  <div class="card">
+    <h3>第 {{ day.day }} 天：{{ day.title }}</h3>
+    <ul>{% for activity in day.activities %}<li><strong>{{ activity.name or activity.title or '未命名活动' }}</strong>：{{ activity.reason or activity.type or '' }}{% if activity.source_note %}<span class="meta">（依据：{{ activity.source_note }}）</span>{% endif %}</li>{% endfor %}</ul>
+    {% if day.estimated_cost is not none %}<p>当日预计花费：{{ "%.0f"|format(day.estimated_cost) }} 元</p>{% endif %}
+  </div>
+  {% endfor %}
+
+  {% if plan.hotel_options %}
+  <h2>住宿候选</h2>
+  <ul>{% for hotel in plan.hotel_options %}<li>{% if hotel.source_url or hotel.url or hotel.propertyUrl %}<a href="{{ hotel.source_url or hotel.url or hotel.propertyUrl }}">{{ hotel.name or hotel.title or '住宿候选' }}</a>{% else %}{{ hotel.name or hotel.title or '住宿候选' }}{% endif %}：{{ hotel.area or hotel.location or '' }}，{% if hotel.nightly_price is defined %}约 {{ hotel.nightly_price }} {{ hotel.currency or '元' }}/晚{% elif hotel.total_price or hotel.totalPrice %}入住总价 {{ hotel.total_price or hotel.totalPrice }} {{ hotel.currency or '' }}{% else %}价格未提供{% endif %}，评分 {{ hotel.rating or hotel.reviewScore or '未知' }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if plan.research_notes %}<h2>攻略与口碑线索</h2><ul>{% for note in plan.research_notes %}<li>{% if note.url or note.source_url or note.link %}<a href="{{ note.url or note.source_url or note.link }}">{{ note.title or note.name or '旅行笔记' }}</a>{% else %}{{ note.title or note.name or '旅行笔记' }}{% endif %}：{{ note.content or note.desc or note.description or '' }}</li>{% endfor %}</ul>{% endif %}
+
+  {% if plan.transport_options %}
+  <h2>交通候选</h2>
+  <ul>{% for item in plan.transport_options %}<li>{% if item.source_url or item.url or item.bookingUrl %}<a href="{{ item.source_url or item.url or item.bookingUrl }}">{{ item.route or item.name or item.flightNumber or item.train_no or '交通候选' }}</a>{% else %}{{ item.route or item.name or item.flightNumber or item.train_no or '交通候选' }}{% endif %}：{{ item.duration or item.durationText or '' }}，{% if item.estimated_price is defined or item.price is defined %}价格 {{ item.estimated_price or item.price }} {{ item.currency or '元' }}{% else %}价格未提供{% endif %}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <h2>预算估算</h2>
+  <ul>{% for key, value in plan.budget_breakdown.items() %}<li>{{ key }}：{{ "%.0f"|format(value) }} 元</li>{% endfor %}</ul>
+  {% if plan.total_estimated_cost is not none %}<p><strong>总计：{{ "%.0f"|format(plan.total_estimated_cost) }} 元</strong></p>{% else %}<p><strong>总计：暂无法可靠估算</strong></p>{% endif %}
+
+  {% if plan.sources %}<h2>信息来源</h2><ul>{% for source in plan.sources %}<li>{% if source.url %}<a href="{{ source.url }}">{{ source.name }}</a>{% else %}{{ source.name }}{% endif %}（检索时间：{{ source.fetched_at }}）</li>{% endfor %}</ul>{% endif %}
+
+  {% if plan.warnings %}
+  <div class="warning"><h2>注意事项</h2><ul>{% for item in plan.warnings %}<li>{{ item }}</li>{% endfor %}</ul></div>
+  {% endif %}
+
+  {% if plan.evidence_ids %}<p class="meta">证据 ID：{{ plan.evidence_ids|join(', ') }}</p>{% endif %}
+</body>
+</html>
