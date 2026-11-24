@@ -42,6 +42,7 @@ from travel_agent.graph.reading import (
     preview_result,
     remember_pages,
 )
+from travel_agent.itinerary import build_itinerary, render_chat
 from travel_agent.models import (
     EvidenceItem,
     MemoryItem,
@@ -428,6 +429,23 @@ class RuntimeEngine:
         feedback = state.get("delivery_feedback", {})
         if state.get("export_source"):
             return self.export_existing(state)
+        if scope.get("scenario") == "execute":
+            # Deterministic stop for the execute loop: the model can keep reading
+            # exhausted results for dozens of rounds (burning tokens and time), so
+            # cap the batch budget and stalled batches, then hand over what exists.
+            rounds = int(state.get("planner_round", 0) or 0)
+            stalled = int(state.get("stalled_batches", 0) or 0)
+            if rounds >= self.settings.max_execute_rounds or stalled >= 4:
+                fallback = saved_progress_reply(state)
+                self.event(state, "agent.execution_budget_exhausted",
+                           {"planner_round": rounds, "stalled_batches": stalled,
+                            "has_digest": bool(fallback)})
+                if fallback:
+                    return self.finish(state, {}, fallback, {
+                        "decision": "ask_user",
+                        "issue": "执行轮次达到上限，先交付已保存的进展",
+                    })
+                return self.block(state, {}, "执行轮次达到上限，且没有可交付的已保存进展")
         last = (state.get("turn_results") or [{}])[-1]
         if last.get("error_type") == "approved_route_conflict":
             version = state["plan_approval"]["version"]
@@ -684,6 +702,13 @@ class RuntimeEngine:
         elif scope["scenario"] == "execute":
             approval["status"] = "completed"
             status = "completed"
+            if not report_allowed(scope):
+                itinerary = build_itinerary(state)
+                if itinerary is not None and itinerary.days:
+                    # One source of truth: the bubble and the board render the
+                    # same itinerary instead of re-writing the plan as prose.
+                    answer = render_chat(itinerary)
+                    changes["itinerary"] = itinerary.model_dump(mode="json")
             if report_allowed(scope):
                 answer = receipt(self.db.latest_report(state["trip_id"]), verdict.get("delivery_note"))
             elif reply_task_ready(scope, state.get("task_plan", [])):
@@ -1098,6 +1123,11 @@ class RuntimeEngine:
                     plan = TravelPlan.model_validate_json(row["payload_json"])
                     if plan.report.get("chat_markdown") and not chat:
                         return {"success": False, "error": "现有文件是聊天导出，需要完整报告工作区。"}
+                itinerary = build_itinerary({**state, "itinerary": None})
+                if itinerary is not None:
+                    plan = plan.model_copy(
+                        update={"report": {**plan.report, "itinerary": itinerary.model_dump(mode="json")}}
+                    )
                 markdown, html = self.renderer.render(plan)
                 version = self.db.latest_report(trip.trip_id)["version"]
                 self.event(state, "report.exported", {"version": version, "html_path": str(html),
@@ -1128,6 +1158,10 @@ class RuntimeEngine:
             result, workspace = report_operation(self.db, self.registry, self.gateway, self.renderer, trip,
                 state.get("report_workspace", {}), args, checkpoint=checkpoint, route_contract=contract)
             state["report_workspace"] = workspace
+            rebuilt = build_itinerary({**state, "itinerary": None})
+            if rebuilt is not None:
+                state["itinerary"] = rebuilt.model_dump(mode="json")
+                self.save(state, trip)
             return result
         raise ValueError("未知内部能力")
 

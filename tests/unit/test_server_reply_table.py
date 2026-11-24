@@ -1,5 +1,5 @@
-"""Tests for projecting a chat answer's timetable into the workbench board."""
-from travel_agent.server import _plan_view, _reply_table_activities
+"""Proposals (tables / numbered steps / period sections) become canonical stops."""
+from travel_agent.itinerary import build_itinerary, render_board, stops_from_text
 
 REPLY = """行程时刻表
 
@@ -12,38 +12,17 @@ REPLY = """行程时刻表
 
 
 def test_table_rows_parsed():
-    rows = _reply_table_activities(REPLY)
-    assert [row["time"] for row in rows] == ["08:40", "09:00-09:45", "12:00-13:00"]
-    assert rows[0]["type"] == "交通"
-    assert rows[2]["type"] == "美食"
-    assert rows[1]["type"] == "游览"
-    assert "**" not in rows[1]["title"]
+    stops = stops_from_text(REPLY)
+    assert [stop.slot.start for stop in stops] == ["08:40", "09:00", "12:00"]
+    assert stops[0].kind == "交通"
+    assert stops[1].kind == "游览"
+    assert stops[2].kind == "美食"
+    assert "**" not in stops[1].name
 
 
 def test_no_table_returns_empty():
-    assert _reply_table_activities("没有表格，只有一段文字。") == []
+    assert stops_from_text("没有表格，只有一段文字。") == []
 
-
-def test_plan_view_falls_back_to_reply_timetable():
-    result = {
-        "trip_state": {
-            "destinations": ["香港"],
-            "duration_days": 1,
-            "traveler_count": 1,
-            "travel_dates": {"start_date": "2026-11-25"},
-            "budget": {"amount": 5000, "currency": "CNY"},
-        },
-        "report_workspace": {"data": {"days": [{
-            "day": 1,
-            "date": "2026-11-25",
-            "stops": [{"name": "香港大学美术博物馆", "start_time": "09:00"}],
-        }]}},
-    }
-    plan = _plan_view(result, None, REPLY)
-    assert plan is not None
-    activities = plan["days"][0]["activities"]
-    assert len(activities) == 3
-    assert activities[1]["title"] == "香港大学美术博物馆"
 
 PERIOD_REPLY = """行程总览
 
@@ -66,33 +45,18 @@ PLAN = """目标：一天内步行+港铁覆盖港岛西与维港。
 
 
 def test_period_rows_parsed():
-    rows = _reply_table_activities(PERIOD_REPLY)
-    assert [row["time"] for row in rows] == ["上午", "中午", "下午", "傍晚", "晚间"]
-    assert rows[1]["type"] == "美食"
-    assert rows[3]["type"] == "交通"
+    stops = stops_from_text(PERIOD_REPLY)
+    assert [stop.slot.period for stop in stops] == ["上午", "中午", "下午", "傍晚", "晚间"]
+    assert stops[1].kind == "美食"
+    assert stops[3].kind == "交通"
 
 
 def test_step_activities_from_proposal():
-    from travel_agent.server import _step_activities
+    stops = stops_from_text(PLAN)
+    assert len(stops) == 3
+    assert stops[0].slot.start == "9:00"
+    assert stops[1].slot.start == "12:00"
 
-    rows = _step_activities(PLAN)
-    assert len(rows) == 3
-    assert rows[0]["time"] == "9:00"
-    assert rows[1]["time"] == "12:00"
-
-
-def test_plan_view_uses_approved_proposal_when_reply_has_no_table():
-    result = {
-        "trip_state": {"destinations": ["香港"], "duration_days": 1, "traveler_count": 1,
-                       "travel_dates": {"start_date": "2026-11-25"},
-                       "budget": {"amount": 5000, "currency": "CNY"}},
-        "report_workspace": {"data": {"days": [{"day": 1, "date": "2026-11-25",
-                                                "stops": [{"name": "香港大学美术博物馆"}]}]}},
-        "plan_approval": {"status": "approved", "proposal": PLAN},
-    }
-    plan = _plan_view(result, None, "已按确认版整理。")
-    assert plan is not None
-    assert len(plan["days"][0]["activities"]) == 3
 
 SECTION_PLAN = """**上午：港大本部 + 美术博物馆**
 - 港铁香港大学站下车，先逛本部大楼一带。
@@ -107,9 +71,37 @@ SECTION_PLAN = """**上午：港大本部 + 美术博物馆**
 
 
 def test_period_sections_parsed():
-    from travel_agent.server import _period_sections
+    stops = stops_from_text(SECTION_PLAN)
+    assert [stop.slot.period for stop in stops] == ["上午", "中午", "下午"]
+    assert stops[1].kind == "美食"
+    assert "茶餐厅" in stops[1].note
 
-    rows = _period_sections(SECTION_PLAN)
-    assert [row["time"] for row in rows] == ["上午", "中午", "下午"]
-    assert rows[1]["type"] == "美食"
-    assert "茶餐厅" in rows[1]["desc"]
+
+def test_board_uses_approved_proposal_to_fill_a_sparse_workspace():
+    result = {
+        "trip_state": {"destinations": ["香港"], "duration_days": 1, "traveler_count": 1,
+                       "travel_dates": {"start_date": "2026-11-25"},
+                       "budget": {"amount": 5000, "currency": "CNY"}},
+        "report_workspace": {"data": {"days": [{"day": 1, "date": "2026-11-25",
+                                                "stops": [{"name": "香港大学美术博物馆"}]}]}},
+        "plan_approval": {"status": "approved", "proposal": PLAN},
+    }
+    itinerary = build_itinerary(result)
+    assert itinerary is not None
+    board = render_board(itinerary)
+    assert len(board["days"][0]["activities"]) == 3
+    assert board["days"][0]["activities"][1]["title"].startswith("中环一带用餐")
+
+
+def test_fully_executed_workspace_is_not_overwritten_by_the_proposal():
+    result = {
+        "trip_state": {"destinations": ["香港"], "duration_days": 1, "traveler_count": 1},
+        "report_workspace": {"data": {"days": [{"day": 1, "stops": [
+            {"name": "执行景点一", "start_time": "09:00"},
+            {"name": "执行景点二", "start_time": "11:00"},
+            {"name": "执行景点三", "start_time": "15:00"},
+        ]}]}},
+        "plan_approval": {"proposal": PLAN},
+    }
+    board = render_board(build_itinerary(result))
+    assert [item["title"] for item in board["days"][0]["activities"]] == ["执行景点一", "执行景点二", "执行景点三"]

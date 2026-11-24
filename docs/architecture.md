@@ -39,3 +39,15 @@
 - `graph/`：LangGraph 节点和路由。
 - `reports/`：结构化旅行计划的 Markdown/HTML 渲染。
 - `cli.py`：本地交互入口。
+
+## 行程的唯一表示
+
+一次行程只允许存在一个可执行对象：`travel_agent.itinerary.Itinerary`。
+
+- 引擎在报告工作区更新后（`internal()` 的 report 分支）把工作区适配成 `Itinerary` 存进
+  `state["itinerary"]`；执行确认的交付轮直接用它渲染聊天正文（`render_chat`）。
+- Web 桥接（`server.py`）的看板投影只调用 `build_itinerary` + `render_board`，不再解析聊天
+  Markdown。适配优先级：已存 `itinerary` → 报告工作区 → 历史报告 payload；最后用已批准的提案
+  正文补齐执行阶段只核实了少数地点的单日行程。
+- 聊天正文、看板、HTML 报告因此来自同一组 `Day/Stop`，不会出现「左边排了 5 段、右边只有 1 个
+  景点」的分叉。价格、评分等仍标注为候选或参考价。

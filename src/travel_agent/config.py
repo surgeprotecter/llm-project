@@ -16,6 +16,7 @@ class Settings:
     database_path: Path = Path("travel_agent.sqlite3")
     context_token_budget: int = 36_000
     max_planner_steps: int = 8
+    max_execute_rounds: int = 24
     max_tool_retries: int = 2
     summary_model_name: str = "deepseek-flash"
     output_dir: Path = Path("output")
@@ -39,6 +40,7 @@ class Settings:
             database_path=Path(os.getenv("TRAVEL_AGENT_DATABASE_PATH", "travel_agent.sqlite3")),
             context_token_budget=int(os.getenv("TRAVEL_AGENT_CONTEXT_TOKEN_BUDGET", "36000")),
             max_planner_steps=int(os.getenv("TRAVEL_AGENT_MAX_PLANNER_STEPS", "8")),
+            max_execute_rounds=int(os.getenv("TRAVEL_AGENT_MAX_EXECUTE_ROUNDS", "24")),
             max_tool_retries=int(os.getenv("TRAVEL_AGENT_MAX_TOOL_RETRIES", "2")),
             summary_model_name=os.getenv("TRAVEL_AGENT_SUMMARY_MODEL", "deepseek-flash"),
             output_dir=Path(os.getenv("TRAVEL_AGENT_OUTPUT_DIR", "output")),

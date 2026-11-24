@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import sqlite3
 import threading
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +39,7 @@ from pydantic import BaseModel, Field
 from travel_agent.config import Settings
 from travel_agent.control import ExecutionCancelled
 from travel_agent.graph import build_graph
+from travel_agent.itinerary import build_itinerary, preview_from_proposal, render_board
 from travel_agent.persistence import Database
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -108,24 +107,6 @@ def _report_digest(row: dict[str, Any] | None) -> dict[str, Any] | None:
 # unknown record shapes are skipped instead of breaking the panel.
 # --------------------------------------------------------------------------- #
 
-_BUDGET_COLORS = [
-    "bg-slate-800",
-    "bg-amber-600",
-    "bg-orange-500",
-    "bg-teal-600",
-    "bg-stone-500",
-    "bg-sky-600",
-    "bg-rose-500",
-]
-
-
-def _num(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _report_payload(row: dict[str, Any] | None) -> dict[str, Any]:
     if not row:
         return {}
@@ -141,405 +122,25 @@ def _report_payload(row: dict[str, Any] | None) -> dict[str, Any]:
     return loaded if isinstance(loaded, dict) else {}
 
 
-def _budget_breakdown(
-    report: dict[str, Any], payload: dict[str, Any], trip: dict[str, Any]
-) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def push(label: Any, amount: Any) -> None:
-        text = str(label or "").strip()
-        value = _num(amount, -1.0)
-        if not text or value <= 0 or text in seen:
-            return
-        seen.add(text)
-        items.append(
-            {"label": text, "amount": round(value), "color": _BUDGET_COLORS[len(items) % len(_BUDGET_COLORS)]}
-        )
-
-    budget = report.get("budget") if isinstance(report.get("budget"), dict) else {}
-    for item in budget.get("items") or []:
-        if isinstance(item, dict):
-            push(item.get("label") or item.get("category"), item.get("amount"))
-    raw_breakdown = payload.get("budget_breakdown") or trip.get("budget_breakdown") or {}
-    if isinstance(raw_breakdown, dict):
-        for label, amount in raw_breakdown.items():
-            push(label, amount)
-    return items
-
-
-def _weather_summary(payload: dict[str, Any], report: dict[str, Any]) -> str:
-    weather = payload.get("weather")
-    if isinstance(weather, dict) and weather:
-        parts = [f"{key}：{value}" for key, value in list(weather.items())[:4] if value not in (None, "")]
-        if parts:
-            return "；".join(str(part) for part in parts)
-    days = report.get("days") or []
-    for day in days:
-        if isinstance(day, dict) and day.get("weather"):
-            return str(day["weather"])
-    return "实时运行结果未返回天气；出行前请重新查询。"
-
-
-def _activity_view(raw: Any, fallback_area: str) -> dict[str, str]:
-    if isinstance(raw, str):
-        raw = {"name": raw}
-    if not isinstance(raw, dict):
-        raw = {}
-    hours = raw.get("estimated_hours")
-    duration = str(raw.get("duration") or "")
-    if not duration and hours:
-        duration = f"{hours} 小时"
-    minutes = raw.get("duration_minutes")
-    if not duration and minutes:
-        try:
-            duration = f"{int(minutes)} 分钟"
-        except (TypeError, ValueError):
-            duration = ""
-    return {
-        "time": str(raw.get("start_time") or raw.get("time") or ""),
-        "type": _TYPE_LABELS.get(str(raw.get("type") or raw.get("category") or "").lower(), str(raw.get("type") or raw.get("category") or "活动")),
-        "title": str(raw.get("name") or raw.get("title") or "未命名活动"),
-        "location": str(raw.get("area") or raw.get("location") or raw.get("address") or fallback_area or ""),
-        "duration": duration,
-        "desc": str(raw.get("reason") or raw.get("desc") or raw.get("content") or ""),
-        "tip": str(raw.get("source_note") or raw.get("tip") or ""),
-    }
-
-
-def _day_views(days: Any, start_date: Any) -> list[dict[str, Any]]:
-    if not isinstance(days, list):
-        return []
-    origin = None
-    if isinstance(start_date, str) and start_date:
-        try:
-            origin = date.fromisoformat(start_date)
-        except ValueError:
-            origin = None
-    result: list[dict[str, Any]] = []
-    for index, raw in enumerate(days):
-        if not isinstance(raw, dict):
-            continue
-        day_no = int(_num(raw.get("day"), index + 1))
-        date_text = str(raw.get("date") or "")
-        if not date_text and origin is not None:
-            date_text = (origin + timedelta(days=max(day_no - 1, 0))).strftime("%m月%d日")
-        area = str(raw.get("area") or raw.get("city") or "")
-        stops = raw.get("stops") or raw.get("activities") or []
-        activities = [_activity_view(stop, area) for stop in stops[:10]] if isinstance(stops, list) else []
-        result.append(
-            {
-                "day": day_no,
-                "date": date_text or f"第 {day_no} 天",
-                "theme": str(raw.get("title") or f"第 {day_no} 天"),
-                "summary": str(raw.get("intro") or raw.get("summary") or ""),
-                "activities": activities,
-            }
-        )
-    return result
-
-
-def _hotel_views(report: dict[str, Any], payload: dict[str, Any], trip: dict[str, Any]) -> list[dict[str, Any]]:
-    records: list[Any] = []
-    for group in report.get("hotel_regions") or []:
-        if isinstance(group, dict):
-            records.extend(group.get("hotels") or [])
-    records.extend(payload.get("hotel_options") or [])
-    records.extend(trip.get("hotel_options") or [])
-    nights = int(_num(trip.get("duration_days"), 1) or 1)
-    views: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in records:
-        if not isinstance(raw, dict):
-            continue
-        name = str(raw.get("name") or raw.get("title") or raw.get("hotel_name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        price = _num(raw.get("nightly_price") or raw.get("price_per_night") or raw.get("price"))
-        total = _num(raw.get("total_price") or raw.get("totalPrice"))
-        if not price and total and nights:
-            price = total / nights
-        tags = [str(tag) for tag in (raw.get("tags") or raw.get("pros") or []) if str(tag).strip()][:4]
-        views.append(
-            {
-                "name": name,
-                "area": str(raw.get("area") or raw.get("location") or raw.get("address") or ""),
-                "rating": str(raw.get("rating") or raw.get("score") or "—"),
-                "nights": nights,
-                "pricePerNight": round(price),
-                "tags": tags or ["需核对房型与可订状态"],
-                "selected": bool(raw.get("selected", False)),
-            }
-        )
-        if len(views) >= 4:
-            break
-    if views:
-        views[0]["selected"] = True
-    return views
-
-
-def _flight_views(report: dict[str, Any], payload: dict[str, Any], trip: dict[str, Any]) -> list[dict[str, Any]]:
-    records: list[Any] = []
-    for group in report.get("transport") or []:
-        if isinstance(group, dict):
-            records.extend(group.get("options") or [])
-    records.extend(payload.get("transport_options") or [])
-    records.extend(trip.get("transport_options") or [])
-    views: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in records:
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("train_no") or str(raw.get("mode") or "").lower() in {"rail", "train"}:
-            continue
-        airline = str(raw.get("airline") or raw.get("carrier") or raw.get("flight_no") or "").strip()
-        if not airline:
-            continue
-        route = str(
-            raw.get("route")
-            or " → ".join(
-                str(part)
-                for part in (
-                    raw.get("origin") or raw.get("from"),
-                    raw.get("destination") or raw.get("to"),
-                )
-                if part
-            )
-            or ""
-        )
-        price = raw.get("price") or raw.get("total_price") or raw.get("amount")
-        price_text = f"¥{round(_num(price)):,}" if _num(price) > 0 else "价格待查询"
-        key = f"{airline}|{route}"
-        if key in seen:
-            continue
-        seen.add(key)
-        views.append(
-            {
-                "direction": str(raw.get("direction") or raw.get("date") or "交通候选"),
-                "airline": airline,
-                "route": route or "航线待确认",
-                "duration": str(raw.get("duration") or raw.get("stops") or ""),
-                "price": price_text,
-                "selected": bool(raw.get("selected", False)),
-            }
-        )
-        if len(views) >= 3:
-            break
-    if views:
-        views[0]["selected"] = True
-    return views
-
-
-_TIME_CELL = re.compile(r"^\d{1,2}:\d{2}(?:[–~-]\d{1,2}:\d{2})?$")
-_PERIOD_CELL = re.compile(r"^(清晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜里|夜)$")
-_STEP_LINE = re.compile(r"^(?:\d+[.、)]|[-*])\s*(.*)$")
-_CLOCK = re.compile(r"(\d{1,2}:\d{2}(?:[–~-]\d{1,2}:\d{2})?)")
-_ACTIVITY_HINTS = (
-    ("港铁", "交通"), ("步行", "交通"), ("小轮", "交通"), ("交通", "交通"),
-    ("午餐", "美食"), ("晚餐", "美食"), ("早餐", "美食"), ("冰厅", "美食"),
-    ("用餐", "美食"), ("早饭", "美食"), ("晚饭", "美食"), ("宵夜", "美食"),
-    ("吃饭", "美食"), ("餐饮", "美食"),
-    ("茶餐厅", "美食"), ("点心", "美食"), ("夜市", "游览"),
-)
-_TYPE_LABELS = {"sightseeing": "游览", "dining": "美食", "food": "美食",
-                "transport": "交通", "hotel": "住宿", "stay": "住宿"}
-
-
-def _activity_kind(text: str) -> str:
-    for hint, kind in _ACTIVITY_HINTS:
-        if hint in text:
-            return kind
-    return "游览"
-
-
-_PERIOD_HEAD = re.compile(
-    r"^\*\*\s*(清晨|早上|上午|中午|下午|傍晚|晚上|晚间|夜里|夜)\s*[：:]\s*(.+?)\s*\*\*\s*$"
-)
-
-
-def _period_sections(plan_text: str) -> list[dict[str, str]]:
-    """Parse proposals written as ``**上午：港大本部**`` headings plus bullet lines."""
-    rows: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-    for raw in (plan_text or "").splitlines():
-        line = raw.strip()
-        head = _PERIOD_HEAD.match(line)
-        if head:
-            title = head.group(2).strip()
-            current = {
-                "time": head.group(1),
-                "type": _activity_kind(title),
-                "title": title,
-                "location": "",
-                "duration": "",
-                "desc": "",
-                "tip": "",
-            }
-            rows.append(current)
-            if len(rows) >= 14:
-                break
-            continue
-        if current is not None and line.startswith("- "):
-            extra = line[2:].strip()
-            if extra:
-                current["desc"] = (current["desc"] + " " + extra).strip()[:120]
-    return [row for row in rows if row["title"]]
-
-
-def _reply_table_activities(reply: str) -> list[dict[str, str]]:
-    """Extract timetable rows (``| 09:00–09:45 | 安排 | 交通 |``) from a chat answer."""
-    rows: list[dict[str, str]] = []
-    for line in (reply or "").splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if len(cells) < 2 or not (_TIME_CELL.match(cells[0]) or _PERIOD_CELL.match(cells[0])):
-            continue
-        title = re.sub(r"\*\*|`", "", cells[1]).strip()
-        if not title:
-            continue
-        detail = re.sub(r"\*\*|`", "", cells[2]).strip() if len(cells) > 2 else ""
-        rows.append({
-            "time": cells[0].replace("–", "-"),
-            "type": _activity_kind(title),
-            "title": title,
-            "location": "",
-            "duration": "",
-            "desc": detail,
-            "tip": "",
-        })
-        if len(rows) >= 14:
-            break
-    return rows
-
-
-def _step_activities(plan_text: str) -> list[dict[str, str]]:
-    """Parse numbered/bulleted plan steps that carry a clock time or a period word."""
-    rows: list[dict[str, str]] = []
-    for line in (plan_text or "").splitlines():
-        match = _STEP_LINE.match(line.strip())
-        if not match:
-            continue
-        body = match.group(1).strip()
-        if not body:
-            continue
-        label = ""
-        rest = body
-        bold = re.match(r"^\*\*(.+?)\*\*\s*[:：]?\s*(.*)$", body)
-        if bold:
-            label = bold.group(1).strip().rstrip("：:")
-            rest = bold.group(2).strip()
-        clock = _CLOCK.search(f"{label} {rest}")
-        if clock:
-            stamp = clock.group(1).replace("–", "-")
-        else:
-            period = _PERIOD_CELL.match(label) or _PERIOD_CELL.match(rest)
-            if not period:
-                continue
-            stamp = period.group(1)
-        title = re.sub(r"\*\*|`", "", rest or label).strip()
-        if not title:
-            continue
-        rows.append({
-            "time": stamp,
-            "type": _activity_kind(title),
-            "title": title,
-            "location": "",
-            "duration": "",
-            "desc": label if label and label != stamp else "",
-            "tip": "",
-        })
-        if len(rows) >= 14:
-            break
-    return rows
-
-
 def _plan_view(
-    result: dict[str, Any], report_row: dict[str, Any] | None, reply: str = ""
+    result: dict[str, Any],
+    report_row: dict[str, Any] | None = None,
+    reply: str = "",
 ) -> dict[str, Any] | None:
-    """Project a live runtime turn into the workbench ``plan`` schema."""
-    trip = result.get("trip_state") if isinstance(result.get("trip_state"), dict) else {}
-    payload = _report_payload(report_row)
-    report = payload.get("report") if isinstance(payload.get("report"), dict) else {}
-    # Chat-delivery turns never write a report row: the itinerary lives in the
-    # runtime workspace instead, so fold it in before projecting the board.
-    workspace = result.get("report_workspace") if isinstance(result.get("report_workspace"), dict) else {}
-    data = workspace.get("data") if isinstance(workspace.get("data"), dict) else {}
-    if data:
-        report = dict(report)
-        if not report.get("days"):
-            report["days"] = data.get("days") or []
-        if not report.get("hotel_regions"):
-            report["hotel_regions"] = data.get("hotel_regions") or []
-        if not report.get("transport"):
-            report["transport"] = data.get("transport") or []
-        if not report.get("budget") and isinstance(data.get("budget"), dict):
-            report["budget"] = data["budget"]
+    """Project the canonical itinerary into the workbench ``plan`` schema.
 
-    destinations = trip.get("destinations") or []
-    destination = str(payload.get("destination") or (destinations[0] if destinations else "") or "").strip()
-    days_src = report.get("days") or payload.get("itinerary") or []
-    hotels = _hotel_views(report, payload, trip)
-    flights = _flight_views(report, payload, trip)
-    if not destination and not days_src and not hotels and not flights:
+    ``reply`` is accepted for call compatibility only: the board renders from
+    :class:`travel_agent.itinerary.Itinerary` and never parses chat prose.
+    """
+    itinerary = build_itinerary(result, _report_payload(report_row))
+    if itinerary is None:
+        approval = result.get("plan_approval") if isinstance(result.get("plan_approval"), dict) else {}
+        pending = result.get("pending_plan") if isinstance(result.get("pending_plan"), dict) else {}
+        proposal = str(approval.get("proposal") or pending.get("proposal") or "")
+        itinerary = preview_from_proposal(result.get("trip_state"), proposal)
+    if itinerary is None:
         return None
-
-    budget = trip.get("budget") if isinstance(trip.get("budget"), dict) else {}
-    start_date = (trip.get("travel_dates") or {}).get("start_date")
-    days = _day_views(days_src, start_date)
-    approval = result.get("plan_approval") if isinstance(result.get("plan_approval"), dict) else {}
-    pending = result.get("pending_plan") if isinstance(result.get("pending_plan"), dict) else {}
-    proposal = str(approval.get("proposal") or pending.get("proposal") or "")
-    if (
-        (reply or proposal)
-        and int(_num(trip.get("duration_days"), 1) or 1) <= 1
-        and sum(len(day.get("activities") or []) for day in days) <= 1
-    ):
-        # Chat-delivery turns answer in prose: reuse the answer's timetable so the
-        # board reflects what the user just read instead of one researched stop.
-        parsed = _reply_table_activities(reply)
-        if len(parsed) < 3:
-            parsed = _step_activities(proposal) or _period_sections(proposal) or parsed
-        if len(parsed) >= 3:
-            days = [{
-                "day": 1,
-                "date": str(start_date or ""),
-                "theme": f"{destination or '目的地'}当日安排",
-                "summary": "按本轮答复整理的时间轴摘要。",
-                "activities": parsed,
-            }]
-    breakdown = _budget_breakdown(report, payload, trip)
-    estimated = _num(
-        (report.get("budget") or {}).get("total") if isinstance(report.get("budget"), dict) else None
-    ) or _num(payload.get("total_estimated_cost"))
-    if not estimated and breakdown:
-        estimated = float(sum(item["amount"] for item in breakdown))
-    total_budget = _num(budget.get("amount") or budget.get("max_amount")) or estimated
-    traveler_count = int(_num(trip.get("traveler_count"), 1) or 1)
-    duration_days = int(_num(trip.get("duration_days"), len(days) or 1) or 1)
-
-    return {
-        "id": f"{trip.get('trip_id') or 'trip'}-live",
-        "title": str(payload.get("title") or (f"{destination}行程" if destination else "旅行计划")),
-        "subtitle": str(
-            report.get("summary")
-            or payload.get("summary")
-            or "由 LangGraph 实时 runtime 生成；未核验的价格与库存以下单页面为准。"
-        ),
-        "destination": destination or "待确认",
-        "duration": f"{duration_days} 天",
-        "travelers": f"{traveler_count} 位旅行者",
-        "totalBudget": total_budget,
-        "estimatedCost": estimated,
-        "currency": str(budget.get("currency") or "CNY"),
-        "weatherSummary": _weather_summary(payload, report),
-        "budgetBreakdown": breakdown,
-        "flights": flights,
-        "hotels": hotels,
-        "days": days,
-    }
+    return render_board(itinerary)
 
 
 def _interrupt_question(result: dict[str, Any]) -> str | None:
