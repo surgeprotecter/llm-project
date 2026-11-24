@@ -38,8 +38,10 @@ class ModelWorker:
 
     def cancel(self):
         self.cancelled.set()
-        if self.active:
-            self.active.cancel()
+        active, loop = self.active, self.loop
+        if active and loop and loop.is_running():
+            # Called from the HTTP thread, not from the loop thread.
+            loop.call_soon_threadsafe(active.cancel)
 
     def close(self):
         self.cancel()

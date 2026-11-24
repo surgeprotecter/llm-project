@@ -142,6 +142,8 @@ POST /api/chat/stream     # SSE：start → progress(每 1.5s) → result|error
 
 GET /api/report?path=output/reports/<trip>/report_v1_xxx.html   # 只读下载报告
 GET /api/health                                                 # 实时模式 / 模型 / 工具模式
+POST /api/cancel?session_id=                                    # 协作式中止该会话正在执行的轮次
+GET /api/plan?session_id=                                       # 刷新页面后重新取看板行程
 ```
 
 `plan` 为看板渲染用的项目视图（预算分项、航班、酒店、逐日活动），由后端把 `task_plan` 与最新报告投影成前端结构后返回；没有结构化行程时为 `null`，前端会保留上一次看板并在气泡里标注「本轮未生成结构化行程」。

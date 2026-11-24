@@ -30,6 +30,10 @@ class DurableAgentGraph:
         try:
             while True:
                 result = self.graph.invoke(value, config, **kwargs)
+                if self.registry.cancelled or getattr(self.gateway, "cancelled", False):
+                    # Stop between checkpoint boundaries even if no model or tool
+                    # request was in flight when the cancel arrived.
+                    raise ExecutionCancelled
                 saved = self.graph.get_state(config)
                 if result.get("agent_done") or not saved.next:
                     result.pop("__interrupt__", None)

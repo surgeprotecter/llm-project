@@ -39,6 +39,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from travel_agent.config import Settings
+from travel_agent.control import ExecutionCancelled
 from travel_agent.graph import build_graph
 from travel_agent.persistence import Database
 
@@ -566,6 +567,11 @@ class AgentRuntimeService:
         # thread_id -> last report row this session produced; keeps the panel
         # honest instead of showing whichever report the trip rendered last.
         self._session_reports: dict[str, dict[str, Any]] = {}
+        # Only one turn runs at a time (single model key, single SQLite file), so
+        # remembering which thread it belongs to keeps /api/cancel from stopping
+        # someone else's queued request.
+        self._active_thread: str | None = None
+        self._cancel_requested = False
 
     def _close_current(self) -> None:
         if self._gateway is not None:
@@ -608,19 +614,38 @@ class AgentRuntimeService:
 
             state = self._graph.get_state(config)
             before = self._database.latest_report(trip_id)
-            if getattr(state, "next", None):
-                # A turn ended on a checkpoint boundary: resume it with the new
-                # user message instead of starting a second thread.
-                result = self._graph.invoke(Command(resume=message), config)
-            else:
-                initial_state = {
-                    "messages": [HumanMessage(content=message)],
+            self._active_thread = thread_id
+            self._cancel_requested = False
+            try:
+                if getattr(state, "next", None):
+                    # A turn ended on a checkpoint boundary: resume it with the new
+                    # user message instead of starting a second thread.
+                    result = self._graph.invoke(Command(resume=message), config)
+                else:
+                    initial_state = {
+                        "messages": [HumanMessage(content=message)],
+                        "user_id": user_id,
+                        "trip_id": trip_id,
+                        "thread_id": thread_id,
+                        "current_query": message,
+                    }
+                    result = self._graph.invoke(initial_state, config)
+            except (KeyboardInterrupt, ExecutionCancelled):
+                snapshot = self._graph.get_state(config)
+                values = dict(getattr(snapshot, "values", None) or {})
+                saved = self._session_reports.get(thread_id)
+                return {
+                    "reply": "已取消本轮执行。已完成的步骤和查询结果都已保存，可以继续提问，或换一种说法。",
+                    "status": "cancelled",
+                    "session_id": thread_id,
                     "user_id": user_id,
                     "trip_id": trip_id,
-                    "thread_id": thread_id,
-                    "current_query": message,
+                    "plan": _plan_view(values, saved, ""),
+                    "traces": build_traces(values),
+                    "report": None,
                 }
-                result = self._graph.invoke(initial_state, config)
+            finally:
+                self._active_thread = None
 
             after = self._database.latest_report(trip_id)
             report_row = None
@@ -643,6 +668,20 @@ class AgentRuntimeService:
                 "traces": build_traces(result),
                 "report": _report_digest(report_row),
             }
+
+    def cancel(self, session_id: str) -> bool:
+        """Cooperatively stop the turn running for this session.
+
+        Must be callable while ``run_turn`` holds the lock, so it never takes it.
+        """
+        thread_id = (session_id or "").strip()
+        if not thread_id or thread_id != self._active_thread:
+            return False
+        self._cancel_requested = True
+        if self._graph is not None:
+            self._graph.gateway.cancel()
+            self._graph.registry.cancel()
+        return True
 
     @property
     def settings(self) -> Settings | None:
@@ -848,6 +887,12 @@ def plan_state(session_id: str) -> dict[str, Any]:
         state = dict(snapshot.values or {})
         plan = _plan_view(state, service._database.latest_report(thread_id), "")
     return {"plan": plan}
+
+
+@app.post("/api/cancel")
+def cancel_turn(session_id: str = "") -> dict[str, Any]:
+    """Ask the running turn of this session to stop at the next safe boundary."""
+    return {"cancelled": service.cancel(session_id)}
 
 
 @app.post("/api/chat")

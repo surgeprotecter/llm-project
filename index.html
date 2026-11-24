@@ -711,6 +711,9 @@ curl -X POST http://localhost:8000/api/chat \
       const abortButton = document.getElementById('abortBtn');
       if (abortButton) {
         abortButton.addEventListener('click', () => {
+          if (STATE.sessionId) {
+            fetch(`${API_BASE}/api/cancel?session_id=${encodeURIComponent(STATE.sessionId)}`, { method: 'POST' }).catch(() => {});
+          }
           if (STATE.liveAbort) STATE.liveAbort.abort();
         });
       }
@@ -1267,8 +1270,8 @@ curl -X POST http://localhost:8000/api/chat \
       } catch (err) {
         hidePendingBubble();
         if (err.name === 'AbortError') {
-          setPipelineStep(-1, '已取消等待 · 后端可能仍在收尾');
-          appendAssistantMessage('已取消等待。后端可能仍在执行本轮，结果会写入数据库；稍后刷新页面或查看 uvicorn 日志即可。', [
+          setPipelineStep(-1, '已取消等待 · 已请求后端停止本轮');
+          appendAssistantMessage('已取消等待，已请求后端停止本轮执行；已完成的步骤和查询结果仍会被保存。', [
             { tool: 'http_bridge', action: 'abort ' + streamEndpoint(), result: '客户端已中止', latency: '' }
           ], '本轮已中止 · 看板未更新');
           return;

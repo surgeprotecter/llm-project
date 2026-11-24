@@ -105,6 +105,10 @@ class ModelGateway:
         self.last_status = "success"
         return response
 
+    @property
+    def cancelled(self) -> bool:
+        return bool(self.worker and self.worker.cancelled.is_set())
+
     def cancel(self):
         if self.worker:
             self.worker.cancel()
