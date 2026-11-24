@@ -116,6 +116,32 @@ uv run travel-agent inspect-context --trip-id hong-kong-trip
 uv run travel-agent export-report --trip-id hong-kong-trip
 ```
 
+## Web 工作台
+
+终端之外还提供了一个单文件网页前端 `index.html`（项目根目录），由极简桥接服务 `src/travel_agent/server.py` 把浏览器请求接到同一个 LangGraph 运行时。界面右上角可选择两种模式：
+
+- **演示沙盒（Demo）**：不启动后端，使用内置示例行程数据，用于查看交互与版式；
+- **本地 FastAPI（Live）**：`POST /api/chat` 调用真实模型与已连接的 MCP 服务。
+
+启动：
+
+```bash
+uv sync --extra dev          # fastapi / uvicorn 已在项目依赖中
+uv run uvicorn travel_agent.server:app --reload --port 8000
+```
+
+然后打开 <http://localhost:8000>（前端默认请求 `http://localhost:8000/api/chat`，可在设置面板修改）。接口约定：
+
+```text
+POST /api/chat
+{"message": "...", "session_id": "TRV-1234", "user_id": "default", "trip_id": "default-trip", "real_only": false}
+→ {"reply": "...", "status": "completed|needs_clarification", "session_id": "...",
+   "plan": null, "traces": [{"tool", "action", "result", "latency"}],
+   "report": {"version", "html_path", "markdown_path", "created_at"}}
+```
+
+`session_id` 即 LangGraph `thread_id`，同一会话的多轮消息会续跑同一个 checkpoint；`real_only=true` 会让该进程切换到严格真实模式（等价于 CLI 的 `--real-only`）。桥接进程用一把全局锁串行处理回合（共用 SQLite 与单一模型 Key），CORS 对所有来源开放，仅适合本地开发，不要直接暴露到公网。
+
 ## 真实数据注意事项
 
 - 未接通的服务不会由 Mock 代替；报告会列明检索来源与时间，无法核实报价时明确标注缺口，并用有说明的规划预留构成预算范围。
@@ -139,6 +165,7 @@ uv run ruff check src/travel_agent tests
 - `src/travel_agent/mcp/`：MCP 配置、发现、调用和适配器。
 - `src/travel_agent/graph/`：LangGraph Agent Loop 与需求/计划节点。
 - `src/travel_agent/reports/`：Markdown/HTML 报告。
+- `src/travel_agent/server.py`：本地 Web 桥接（FastAPI），`index.html` 为配套单页工作台。
 - `docs/project_plan.md`：总体规划；`docs/tool_protocol.md`：工具接入协议。
 
 ## 参考与归属
