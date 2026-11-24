@@ -121,7 +121,7 @@ uv run travel-agent export-report --trip-id hong-kong-trip
 终端之外还提供了一个单文件网页前端 `index.html`（项目根目录），由极简桥接服务 `src/travel_agent/server.py` 把浏览器请求接到同一个 LangGraph 运行时。界面右上角可选择两种模式：
 
 - **演示沙盒（Demo）**：不启动后端，使用内置示例行程数据，用于查看交互与版式；
-- **本地 FastAPI（Live）**：`POST /api/chat` 调用真实模型与已连接的 MCP 服务。
+- **本地 FastAPI（Live）**：`POST /api/chat` 调用真实模型与已连接的 MCP 服务；页面实际走 `POST /api/chat/stream`（SSE），边跑边推送阶段、模型轮数、工具调用与耗时，等待中可随时中止。
 
 启动：
 
@@ -133,12 +133,18 @@ uv run uvicorn travel_agent.server:app --reload --port 8000
 然后打开 <http://localhost:8000>（前端默认请求 `http://localhost:8000/api/chat`，可在设置面板修改）。接口约定：
 
 ```text
-POST /api/chat
+POST /api/chat            # 一次性返回，兼容脚本/curl
+POST /api/chat/stream     # SSE：start → progress(每 1.5s) → result|error
 {"message": "...", "session_id": "TRV-1234", "user_id": "default", "trip_id": "default-trip", "real_only": false}
 → {"reply": "...", "status": "completed|needs_clarification", "session_id": "...",
    "plan": null, "traces": [{"tool", "action", "result", "latency"}],
    "report": {"version", "html_path", "markdown_path", "created_at"}}
+
+GET /api/report?path=output/reports/<trip>/report_v1_xxx.html   # 只读下载报告
+GET /api/health                                                 # 实时模式 / 模型 / 工具模式
 ```
+
+`plan` 为看板渲染用的项目视图（预算分项、航班、酒店、逐日活动），由后端把 `task_plan` 与最新报告投影成前端结构后返回；没有结构化行程时为 `null`，前端会保留上一次看板并在气泡里标注「本轮未生成结构化行程」。
 
 `session_id` 即 LangGraph `thread_id`，同一会话的多轮消息会续跑同一个 checkpoint；`real_only=true` 会让该进程切换到严格真实模式（等价于 CLI 的 `--real-only`）。桥接进程用一把全局锁串行处理回合（共用 SQLite 与单一模型 Key），CORS 对所有来源开放，仅适合本地开发，不要直接暴露到公网。
 
