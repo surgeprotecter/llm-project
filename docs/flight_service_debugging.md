@@ -48,3 +48,29 @@ The project adapter now also treats an explicit embedded `success: false` as a
 failed invocation even if the MCP envelope's `isError` is false. Genuine
 `success: true, count: 0` results retain their meaning. This prevents parse errors
 from appearing as successful flight searches.
+
+## 2026-11-24 — intermittent `ds:1` misses
+
+Real runs started failing with `Search failed: Search page carried no ds:1
+payload` for identical routes that had worked minutes earlier (PVG,SHA →
+NRT,HND, 2 adults, 2026-12-02 → 2026-12-05). Manual probes reproduced it in
+roughly a quarter of back-to-back fetches, with no consent/captcha interstitial
+and normal page bytes, so this is Google intermittently serving the JS shell
+under bursty traffic rather than a changed page shape.
+
+The pinned transport retried only 3 times (0.5s/1.5s). `scripts/fli_mcp_compat.py`
+now calls `install_resilient_fetch()` before starting the MCP server, which
+replaces `fetch_payload` in `fli.search._tfs`, `fli.search.flights` and
+`fli.search.dates` with a version that:
+
+- retries up to 5 times with 0.8s/1.6s/3s/5s backoff plus jitter;
+- alternates the original URL with an `hl=en&gl=US` variant (currency and
+  other params untouched), so a locale-specific shell can fall back.
+
+Verification: simulated misses (fake client answering a payload-less shell for
+the first 2 and first 4 calls) now succeed on attempt 3 and 5; an always-shell
+client gives up after 5 attempts (~11s) instead of 3 (~2s). Live checks after
+the patch: PVG→BKK 2026-12-10 (20 flights, 1.0s), PEK→HND 2026-12-12 → 2026-12-18
+(13 flights, 2.2s), and an agent turn on flifix-1202 stored 24 round-trip
+options (cheapest Korean Air KE892/KE711/KE714/KE881, CNY 5,610). `tests/unit/
+test_fli_compat.py` covers the locale-variant helper.

@@ -12,6 +12,42 @@ import httpx
 from travel_agent.models import ToolResult, ToolSpec
 from travel_agent.tools.base import TravelTool
 
+# Photon reports Hong Kong/Macau features under the mainland China country code.
+COUNTRY_ALIASES = {"HK": {"CN"}, "MO": {"CN"}}
+# (min_lon, min_lat, max_lon, max_lat) used to keep CN-indexed results in-region.
+REGION_BOUNDS = {
+    "HK": (113.82, 22.14, 114.44, 22.57),
+    "MO": (113.52, 22.10, 113.60, 22.22),
+}
+
+
+def country_matches(actual: str | None, wanted: str | None) -> bool:
+    actual_code = (actual or "").upper()
+    wanted_code = (wanted or "").upper()
+    return actual_code == wanted_code or actual_code in COUNTRY_ALIASES.get(wanted_code, set())
+
+
+def _inside(coordinates, bounds) -> bool:
+    lon, lat = float(coordinates[0]), float(coordinates[1])
+    min_lon, min_lat, max_lon, max_lat = bounds
+    return min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+
+
+def _center_pair(center: str) -> tuple[float, float]:
+    """Accept ``lon,lat`` or ``lat,lon`` and return bounded ``(lon, lat)``.
+
+    Models sometimes pass coordinates in latitude-first order; the bounds check
+    keeps the bbox valid so Photon does not reject it with HTTP 400.
+    """
+    try:
+        first, second = (float(part) for part in str(center).split(",", 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("center must be 'longitude,latitude' in WGS84") from exc
+    lon, lat = (first, second) if abs(second) <= 90 else (second, first)
+    if abs(lon) > 180 or abs(lat) > 90:
+        raise ValueError("center coordinates out of WGS84 range")
+    return lon, max(-89.9, min(89.9, lat))
+
 
 class LiveHTTPTool(TravelTool):
     source_type = "api"
@@ -68,22 +104,40 @@ class LiveHTTPTool(TravelTool):
         pause = 1.1 - (time.monotonic() - LiveHTTPTool._last_geocode)
         if pause > 0:
             time.sleep(pause)
-        params = {"q": query, "countrycode": country_code.upper(), "limit": 10, "lang": "en"}
+        wanted = (country_code or "").upper()
+        region = REGION_BOUNDS.get(wanted)
+        params = {
+            "q": query,
+            "countrycode": "CN" if region else wanted,
+            "limit": 10,
+            "lang": "en",
+        }
         if center:
-            lon, lat = map(float, center.split(","))
-            params["bbox"] = f"{lon - 1.2},{lat - 1.2},{lon + 1.2},{lat + 1.2}"
+            lon, lat = _center_pair(center)
+            params["bbox"] = (
+                f"{lon - 1.2:.4f},{lat - 1.2:.4f},{lon + 1.2:.4f},{lat + 1.2:.4f}"
+            )
             # A centre bias can rank a nearby bus stop ahead of the named attraction.
+        elif region:
+            # Photon indexes Hong Kong/Macau under CN, so bound the search instead.
+            params["bbox"] = ",".join(f"{value:.4f}" for value in region)
         url = os.getenv("TRAVEL_AGENT_PHOTON_URL", "https://photon.komoot.io/api/")
         response = client.get(url, params=params)
+        if response.status_code == 400 and "bbox" in params:
+            # Photon rejects out-of-range bounds with 400; drop the bias and retry.
+            params.pop("bbox", None)
+            response = client.get(url, params=params)
         LiveHTTPTool._last_geocode = time.monotonic()
         response.raise_for_status()
         found = []
         for feature in response.json().get("features", []):
             props = feature.get("properties", {})
-            if props.get("countrycode", "").upper() != country_code.upper():
+            if not country_matches(props.get("countrycode"), wanted):
                 continue
             coordinates = feature.get("geometry", {}).get("coordinates", [])
             if len(coordinates) != 2:
+                continue
+            if region and not _inside(coordinates, region):
                 continue
             osm_type = {"N": "node", "W": "way", "R": "relation"}.get(props.get("osm_type"))
             found.append(
