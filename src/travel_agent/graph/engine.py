@@ -98,6 +98,36 @@ def resolve_flight_dates(args, request, trip, approved):
     return args
 
 
+def flight_table_lines(data, limit=8):
+    """Compact Markdown rows for a flight result, used when the reply check cannot pass."""
+    flights = [item for item in data.get("flights") or []
+               if isinstance(item, dict) and item.get("legs")]
+    if not flights:
+        return []
+    round_trip = str(data.get("trip_type")).lower() == "round_trip"
+    rows = ["| # | 航司 | 去程 | 回程 | 价格 |", "| --- | --- | --- | --- | --- |"]
+
+    def segment(legs):
+        if not legs:
+            return "—"
+        numbers = " / ".join(
+            f"{leg.get('airline_code') or ''}{leg.get('flight_number') or ''}".strip()
+            or str(leg.get("airline") or "") for leg in legs
+        )
+        departs = str(legs[0].get("departure_time") or "")[5:16].replace("T", " ")
+        arrives = str(legs[-1].get("arrival_time") or "")[5:16].replace("T", " ")
+        return f"{numbers} {departs}→{arrives}".strip()
+
+    for index, item in enumerate(flights[:limit], 1):
+        legs = item["legs"]
+        half = len(legs) // 2 if round_trip and len(legs) >= 2 else len(legs)
+        price = item.get("price")
+        amount = f"{price:,.0f}" if isinstance(price, int | float) else "—"
+        rows.append(f"| {index} | {item.get('primary_airline_name') or '—'} | {segment(legs[:half])} "
+                    f"| {segment(legs[half:])} | {item.get('currency') or ''} {amount} |")
+    return rows
+
+
 def mark_chat_delivery(scope, plan):
     if scope["scenario"] != "execute" or scope["artifact"] != "none" or not plan:
         return
@@ -105,6 +135,76 @@ def mark_chat_delivery(scope, plan):
     if (final["status"] != "completed" and not final.get("completion")
         and re.search(r"(?:整合|汇总|撰写|生成).*(?:行程|报告|攻略|答复)", final["description"])):
         final.update(completion="reply", description="整合已保存结果，在聊天中交付完整答复")
+
+
+_STATUS_LABELS = {"completed": "已完成", "in_progress": "进行中", "pending": "待处理"}
+
+
+def saved_progress_reply(state):
+    """Deterministic digest of already-persisted work, used when the model cannot answer."""
+    lines = []
+    summary = state.get("semantic_summary") or {}
+    decisions = [str(item).strip()[:160] for item in summary.get("decisions") or [] if str(item).strip()]
+    findings = [str(item).strip()[:160] for item in summary.get("findings") or [] if str(item).strip()]
+    workspace = (state.get("report_workspace") or {}).get("data") or {}
+    days = [day for day in workspace.get("days") or [] if isinstance(day, dict) and day.get("stops")]
+    if days:
+        lines.append("**已保存的行程**")
+        for day in days[:4]:
+            heading = f"- Day {day.get('day') or '?'}"
+            if day.get("date"):
+                heading += f"（{day['date']}）"
+            city = day.get("city") or day.get("stay_city")
+            if city:
+                heading += f" · {city}"
+            lines.append(heading)
+            for stop in day["stops"][:6]:
+                if not isinstance(stop, dict):
+                    continue
+                name = stop.get("name") or stop.get("title") or ""
+                if not name:
+                    continue
+                clock = stop.get("start_time") or stop.get("time") or ""
+                minutes = stop.get("duration_minutes")
+                suffix = f" · {minutes} 分钟" if isinstance(minutes, (int, float)) and minutes else ""
+                lines.append(f"  - {f'{clock} ' if clock else ''}{name}{suffix}")
+    if decisions:
+        lines.append("**已确认的结论**")
+        lines.extend(f"- {text}" for text in decisions[:3])
+    if findings and not days:
+        lines.append("**已核实的信息**")
+        lines.extend(f"- {text}" for text in findings[:5])
+    plan = [item for item in state.get("task_plan") or [] if isinstance(item, dict)]
+    pending = [item for item in plan if item.get("status") != "completed"]
+    if pending:
+        lines.append("**尚未完成的步骤**")
+        lines.extend(
+            f"- {item.get('id') or ''} {str(item.get('description') or '')[:120]}"
+            f"（{_STATUS_LABELS.get(str(item.get('status')), '待处理')}）".replace("  ", " ").strip()
+            for item in pending[:4]
+        )
+    if not lines:
+        return ""
+    return "\n\n".join([
+        "模型两次没有返回可用的答复，先把已经保存的进展整理在这里：",
+        "\n".join(lines),
+        "回复「继续」可以接着做，或直接告诉我要补哪一项。",
+    ])
+
+
+_ISSUE_URL = re.compile(r"https?://\S+")
+_ISSUE_CLIENT = re.compile(r"Client error '([^']+)' for url '[^']*'")
+_ISSUE_ENVELOPE = re.compile(r'^\{\s*"items"\s*:\s*"API 调用失败[^"]*"\s*\}\s*[；;]\s*')
+
+
+def issue_text(issue, limit=220):
+    """Turn a raw tool exception into a short, readable reason for the user."""
+    text = str(issue or "").strip()
+    text = _ISSUE_ENVELOPE.sub("", text)
+    text = _ISSUE_CLIENT.sub(r"接口返回 \1", text)
+    text = _ISSUE_URL.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip(" ；;，,。:")
+    return text[:limit] or "步骤执行时遇到接口错误"
 
 
 class RuntimeEngine:
@@ -449,6 +549,11 @@ class RuntimeEngine:
                 "evidence": state.get("trip_state", {}).get("evidence_ids"), "selected": state.get("selected_results"),
             }).encode()).hexdigest()
             if marker == state.get("research_checkpoint"):
+                fallback = saved_progress_reply({**state, **changes})
+                if fallback:
+                    return self.finish({**state, **changes}, changes, fallback,
+                                       {"decision": "ask_user",
+                                        "issue": verdict.get("issue") or "仍缺少可核实的结果"})
                 return self.block(state, changes, verdict.get("issue") or "仍缺少可核实的结果")
             changes["research_checkpoint"] = marker
         decision = verdict["decision"]
@@ -461,6 +566,11 @@ class RuntimeEngine:
         if decision == "research" or (decision == "revise" and not has_replacement):
             issue = str(verdict.get("issue") or "请完成本轮要求。")[:900]
             if decision == "revise" and state.get("final_checks", 0):
+                fallback = self.evidence_reply({**state, **changes})
+                if fallback:
+                    return self.finish({**state, **changes}, changes, fallback,
+                                       {"decision": "pass",
+                                        "delivery_note": "答复未通过校验，改为直接列出接口原始结果。"})
                 return self.block(state, changes, issue)
             return {**changes, "pending_calls": [], "needs_action": decision == "research",
                     "final_checks": state.get("final_checks", 0) + int(decision == "revise"), "protocol_repairs": 0,
@@ -471,6 +581,11 @@ class RuntimeEngine:
     def repair_protocol(self, state, changes):
         changes["agent_messages"].pop()
         if state.get("protocol_repairs", 0):
+            fallback = saved_progress_reply({**state, **changes})
+            if fallback:
+                return self.finish({**state, **changes}, changes, fallback,
+                                   {"decision": "ask_user",
+                                    "issue": "模型连续两次未返回可执行的工具调用或有效答复"})
             return self.block(state, changes, "模型连续两次未返回可执行的工具调用或有效答复")
         self.event(state, "agent.protocol_repair", {"attempt": 1})
         return {**changes, "pending_calls": [], "needs_action": False,
@@ -478,10 +593,11 @@ class RuntimeEngine:
                 "delivery_feedback": {"decision": "protocol", "issue": "请使用原生工具调用，或用自然语言直接答复。"}}
 
     def block(self, state, changes, issue):
-        issue = str(issue)[:350].rstrip("。")
+        issue = issue_text(issue)
         self.event(state, "agent.execution_blocked", {"issue": issue})
         return self.finish(state, changes, "", {
-            "decision": "blocked", "answer": f"本轮停在这里：{issue}。已保存完成的步骤和查询结果。",
+            "decision": "blocked",
+            "answer": f"本轮没能交付最终结果：{issue}。已保存完成的步骤和查询结果，可以换个问法继续，或让我直接列出原始结果。",
         })
 
     def export_existing(self, state):
@@ -598,6 +714,23 @@ class RuntimeEngine:
             self.save({**state, **changes})
         self.event(state, "agent.turn_finished", {"decision": decision, "run_status": status})
         return changes
+
+    def evidence_reply(self, state):
+        """Answer directly from the last successful lookup when the reply check cannot pass."""
+        scope = state.get("request_scope") or {}
+        if scope.get("scenario") not in {"lookup", "compare"}:
+            return ""
+        for row in reversed(state.get("tool_results", [])):
+            if not row.get("success") or row.get("tool_name") != "google_flights__search_flights":
+                continue
+            rows = flight_table_lines(row.get("data") or {})
+            if rows:
+                return "\n\n".join([
+                    "自动答复校验没有通过，先把接口返回的原始航班结果列在这里：",
+                    "\n".join(rows),
+                    "以上为工具原始数据，未经二次改写。",
+                ])
+        return ""
 
     def check_delivery(self, state, answer):
         scope = state["request_scope"]
@@ -790,15 +923,18 @@ class RuntimeEngine:
             working["action_observations"][action_key] = digest
             if not state.get("export_source"):
                 self.save(working, trip)
-        feedback = {}
-        if stalled:
-            feedback = {"decision": "no_progress", "repeated_actions": stalled,
-                        "issue": "重复动作没有新结果。用已取得的信息回答，或采用不同参数和真实来源继续本轮任务。"}
-            self.event(working, "agent.no_progress", {"actions": stalled})
         recent = working["turn_results"][-len(calls):] if calls else []
         needs_progress = bool(stalled) and all(not r["new_information"] for r in recent)
         advanced = any(r["new_information"] for r in recent)
         rounds = 0 if advanced else state.get("stalled_batches", 0) + 1
+        feedback = {}
+        if stalled:
+            issue = "重复动作没有新结果。用已取得的信息回答，或采用不同参数和真实来源继续本轮任务。"
+            if rounds >= 2:
+                issue = ("连续两批动作都没有产生新信息。不要再次读取同一结果或同一字段；"
+                         "必须改用具体查询工具（地图、航班、铁路、天气、搜索）核实，或直接交付已有结果。")
+            feedback = {"decision": "no_progress", "repeated_actions": stalled, "issue": issue}
+            self.event(working, "agent.no_progress", {"actions": stalled, "rounds": rounds})
         return {k: v for k, v in {**working, "pending_calls": [], "needs_action": False,
                                  "needs_progress": needs_progress, "delivery_feedback": feedback,
                                  "stalled_batches": rounds, "protocol_repairs": 0 if advanced else state.get("protocol_repairs", 0),
@@ -856,7 +992,10 @@ class RuntimeEngine:
                         task["summary"] = old["summary"]
                 for ref in task.get("result_refs", []):
                     if not self.reference_exists(state, ref):
-                        raise ValueError(f"结果引用不存在：{ref}")
+                        raise ValueError(
+                            f"结果引用不存在：{ref}。可用引用示例：{self.reference_hints(state)}；"
+                            "也可以直接用 workspace:字段名 或 artifact:文件路径"
+                        )
             mark_chat_delivery(state["request_scope"], args["tasks"])
             state["task_plan"] = args["tasks"]
             goal = state["active_goal"]
@@ -970,7 +1109,7 @@ class RuntimeEngine:
             contract = None
             if args["operation"] != "prepare" and state.get("report_workspace") and (approved := approved_plan_view(state)):
                 contract = state["plan_approval"].get("route_contract")
-                if not contract or contract.get("schema") != 2 or contract["version"] != approved["version"]:
+                if not contract or contract.get("schema") != 3 or contract["version"] != approved["version"]:
                     contract = extract_route_contract(self.gateway, approved, state["request_scope"].get("requirements", []))
                     state["plan_approval"] = {**state["plan_approval"], "route_contract": contract}
                     self.save(state)
@@ -997,7 +1136,26 @@ class RuntimeEngine:
             return bool(state.get("report_workspace", {}).get("data", {}).get(reference.split(":", 1)[1]))
         if reference.startswith("artifact:"):
             return Path(reference.split(":", 1)[1]).is_file()
-        return bool(self.store.result(state["thread_id"], reference))
+        if self.store.result(state["thread_id"], reference):
+            return True
+        data = state.get("report_workspace", {}).get("data", {})
+        for key in ("places", "sources"):
+            for item in data.get(key) or []:
+                if isinstance(item, dict) and reference in {item.get("id"), item.get("result_id")}:
+                    return True
+        return False
+
+    def reference_hints(self, state):
+        refs = []
+        data = state.get("report_workspace", {}).get("data", {})
+        for item in data.get("places") or []:
+            if isinstance(item, dict) and item.get("id"):
+                refs.append(str(item["id"]))
+        for row in reversed(state.get("tool_results", [])):
+            if row.get("result_id"):
+                refs.append(str(row["result_id"]))
+        unique = list(dict.fromkeys(refs))[:5]
+        return "、".join(unique) if unique else "（暂无；先取得真实查询结果）"
 
     def read(self, state, trip, name, args):
         section = args.get("section")

@@ -66,7 +66,14 @@ def extract_route_contract(gateway, approved, requirements):
         total is not None and sum(reserved.values()) >= total
     ):
         raise ValueError("提案中的独立交通与机动天数无效")
-    return {"schema": 2, "version": approved["version"], "total_days": total, "stops": stops, "reserved": reserved}
+    # A one-day city walk often lists neighbourhoods and sights as separate
+    # paragraphs. Treating each as a staying stop makes the approval impossible
+    # to satisfy (three stops need three days, the approved total is one day), so
+    # keep the day budget and drop the per-stop stays instead of dead-locking.
+    required = sum(1 if item["min_days"] is None else item["min_days"] for item in stops)
+    if total is not None and required > total:
+        stops = []
+    return {"schema": 3, "version": approved["version"], "total_days": total, "stops": stops, "reserved": reserved}
 
 
 def key(name):
