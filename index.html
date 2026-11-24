@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VoyageOS · AI 智能旅行规划工作台 (travel_agent)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'Noto Sans SC', 'system-ui', 'sans-serif'],
+            serif: ['Noto Serif SC', 'Georgia', 'serif'],
+          },
+          colors: {
+            alabaster: '#FAF9F6',
+            sand: '#F3EFEA',
+            ink: '#1E293B',
+            terracotta: '#D97706',
+            ember: '#EA580C',
+            sage: '#0D9488',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* 自定义滚动条与平滑过渡 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94A3B8;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.85); opacity: 0.8; }
+      70% { transform: scale(1.4); opacity: 0; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
+    .animate-pulse-ring {
+      animation: pulse-ring 1.8s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+    }
+    .glass-panel {
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(12px);
+    }
+  </style>
+</head>
+<body class="bg-alabaster text-ink font-sans antialiased h-screen flex flex-col overflow-hidden selection:bg-amber-100 selection:text-amber-900">
+
+  <!-- 顶部导航栏 -->
+  <header class="h-14 border-b border-stone-200/80 bg-white/90 backdrop-blur-md px-4 lg:px-6 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-sm">
+        <i data-lucide="compass" class="w-4 h-4"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-serif font-bold text-base tracking-tight text-slate-900">VoyageOS</h1>
+          <span class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-stone-100 text-stone-600 border border-stone-200/70">travel_agent · LangGraph</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中间会话与 SQLite 状态指示器 -->
+    <div class="hidden md:flex items-center gap-3 text-xs text-slate-500 bg-alabaster px-3 py-1.5 rounded-full border border-stone-200/70">
+      <span class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-teal-500"></span>
+        <span>SQLite 持久化: <code class="font-mono text-slate-700">travel_agent.sqlite3</code></span>
+      </span>
+      <span class="text-stone-300">|</span>
+      <span id="sessionIdBadge" class="font-mono text-slate-600">Session #TRV-8042</span>
+      <span class="text-stone-300">|</span>
+      <span id="modeBadge" class="font-medium text-amber-700">演示沙盒模式</span>
+    </div>
+
+    <!-- 右侧操作栏 -->
+    <div class="flex items-center gap-2">
+      <!-- 移动端视图切换 -->
+      <div class="flex lg:hidden bg-stone-100 p-0.5 rounded-lg border border-stone-200">
+        <button id="mobileTabChat" onclick="switchMobileView('chat')" class="px-2.5 py-1 text-xs font-medium rounded-md bg-white text-slate-900 shadow-sm">对话</button>
+        <button id="mobileTabReport" onclick="switchMobileView('report')" class="px-2.5 py-1 text-xs font-medium rounded-md text-slate-600">行程看板</button>
+      </div>
+
+      <button onclick="startNewSession()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition shadow-2xs" title="开启新会话">
+        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+        <span class="hidden sm:inline">新行程</span>
+      </button>
+
+      <button onclick="toggleModal('settingsModal', true)" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition shadow-2xs">
+        <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5 text-amber-600"></i>
+        <span>后端连接配置</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 主体双栏工作区 -->
+  <main class="flex-1 flex overflow-hidden relative">
+    
+    <!-- 左侧：Agent 对话与 LangGraph 执行流 -->
+    <section id="chatPane" class="w-full lg:w-[44%] xl:w-[40%] flex flex-col border-r border-stone-200/80 bg-alabaster h-full">
+      
+      <!-- LangGraph 实时状态管线指示条 -->
+      <div class="px-4 py-2.5 bg-white border-b border-stone-200/70 shrink-0">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <i data-lucide="git-branch" class="w-3 h-3 text-amber-600"></i>
+            LangGraph Agent 状态机
+          </span>
+          <span id="pipelineStatusText" class="text-[11px] font-medium text-teal-700">就绪 · 等待指令</span>
+        </div>
+        <div class="grid grid-cols-5 gap-1" id="pipelineSteps">
+          <div data-step="0" class="pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all">
+            <span class="text-[10px] font-medium text-slate-600 truncate w-full text-center">1. 意图解析</span>
+          </div>
+          <div data-step="1" class="pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all">
+            <span class="text-[10px] font-medium text-slate-600 truncate w-full text-center">2. MCP检索</span>
+          </div>
+          <div data-step="2" class="pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all">
+            <span class="text-[10px] font-medium text-slate-600 truncate w-full text-center">3. 路线规划</span>
+          </div>
+          <div data-step="3" class="pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all">
+            <span class="text-[10px] font-medium text-slate-600 truncate w-full text-center">4. 报价核算</span>
+          </div>
+          <div data-step="4" class="pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all">
+            <span class="text-[10px] font-medium text-slate-600 truncate w-full text-center">5. 报告交付</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 对话消息流容器 -->
+      <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- 欢迎消息由 JS 初始化注入 -->
+      </div>
+
+      <!-- 快捷指令 Chips & 输入区 -->
+      <div class="p-3.5 bg-white border-t border-stone-200/80 shrink-0">
+        <div class="flex items-center gap-1.5 overflow-x-auto pb-2.5 mb-1 no-scrollbar">
+          <button onclick="sendQuickPrompt('帮我规划一个东京5天4晚的深度游，预算1.5万人民币，偏爱建筑美学与在地美食')" class="shrink-0 text-xs px-2.5 py-1 rounded-full bg-amber-50/80 hover:bg-amber-100 text-amber-900 border border-amber-200/70 transition">
+            🗼 东京5天4晚深度游 · ¥1.5万
+          </button>
+          <button onclick="sendQuickPrompt('周末从香港出发去台北3天2晚美食与文创之旅，2人同行')" class="shrink-0 text-xs px-2.5 py-1 rounded-full bg-stone-100 hover:bg-stone-200/70 text-slate-700 border border-stone-200 transition">
+            🍜 香港→台北3天2晚美食之旅
+          </button>
+          <button onclick="sendQuickPrompt('调整第2天的行程，下午增加美术馆参观，并把晚餐换成高性价比居酒屋')" class="shrink-0 text-xs px-2.5 py-1 rounded-full bg-teal-50/80 hover:bg-teal-100 text-teal-900 border border-teal-200/70 transition">
+            ✏️ 微调第2天行程
+          </button>
+        </div>
+
+        <form id="chatForm" onsubmit="handleChatSubmit(event)" class="relative flex items-end gap-2">
+          <textarea
+            id="chatInput"
+            rows="2"
+            placeholder="描述你的目的地、天数、预算或对当前行程的修改意见..."
+            class="w-full resize-none rounded-2xl border border-stone-300 bg-alabaster/70 focus:bg-white px-3.5 py-2.5 pr-12 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 transition"
+            onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); handleChatSubmit(event);}"
+          ></textarea>
+          <button
+            type="submit"
+            id="sendBtn"
+            class="absolute right-2 bottom-2 w-9 h-9 rounded-xl bg-slate-900 hover:bg-amber-600 text-white flex items-center justify-center transition shadow-sm disabled:opacity-40"
+          >
+            <i data-lucide="arrow-up" class="w-4 h-4"></i>
+          </button>
+        </form>
+      </div>
+    </section>
+
+    <!-- 右侧：杂志级可视化行程工作台 (Travel Report Workbench) -->
+    <section id="reportPane" class="hidden lg:flex flex-1 flex-col bg-alabaster h-full overflow-y-auto">
+      
+      <!-- 顶部操作条 -->
+      <div class="sticky top-0 z-10 glass-panel border-b border-stone-200/70 px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 text-[11px] font-semibold rounded bg-amber-100 text-amber-800">REPORT WORKBENCH</span>
+          <span id="reportVersionBadge" class="text-xs text-slate-500">v1.0 · 已同步至报告引擎</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="prefillRevision()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition">
+            <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+            <span>微调此行程</span>
+          </button>
+          <button onclick="exportMarkdownReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition shadow-2xs">
+            <i data-lucide="file-text" class="w-3.5 h-3.5 text-slate-500"></i>
+            <span>导出 Markdown</span>
+          </button>
+          <button onclick="exportHtmlReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition shadow-2xs">
+            <i data-lucide="download" class="w-3.5 h-3.5"></i>
+            <span>导出精美 HTML 报告</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 工作台主内容区 -->
+      <div id="workbenchContent" class="p-6 max-w-5xl mx-auto w-full space-y-6 pb-16">
+        <!-- 动态渲染的行程报告内容 -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 后端连接与 FastAPI 桥接配置弹窗 -->
+  <div id="settingsModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+    <div class="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="px-6 py-4 border-b border-stone-200 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center">
+            <i data-lucide="server" class="w-4 h-4"></i>
+          </div>
+          <div>
+            <h2 class="font-bold text-slate-900 text-base">Python 后端连接与 MCP 桥接配置</h2>
+            <p class="text-xs text-slate-500">将此可视化前端无缝接入你的本地 <code class="font-mono">nlp-project/src/travel_agent</code></p>
+          </div>
+        </div>
+        <button onclick="toggleModal('settingsModal', false)" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-stone-100">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <div class="p-6 overflow-y-auto space-y-5 text-sm">
+        <!-- 运行模式切换 -->
+        <div>
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">选择运行模式</label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label class="cursor-pointer border rounded-xl p-3.5 flex items-start gap-3 transition has-[:checked]:border-amber-500 has-[:checked]:bg-amber-50/40 border-stone-200">
+              <input type="radio" name="backendMode" value="demo" checked onchange="updateBackendMode(this.value)" class="mt-1 accent-amber-600">
+              <div>
+                <div class="font-semibold text-slate-900 text-sm">前端交互演示模式 (Demo)</div>
+                <p class="text-xs text-slate-500 mt-0.5">无需启动 Python 服务，内置完整的 LangGraph 节点演进、MCP 日志与动态行程微调体验。</p>
+              </div>
+            </label>
+            <label class="cursor-pointer border rounded-xl p-3.5 flex items-start gap-3 transition has-[:checked]:border-teal-600 has-[:checked]:bg-teal-50/40 border-stone-200">
+              <input type="radio" name="backendMode" value="live" onchange="updateBackendMode(this.value)" class="mt-1 accent-teal-600">
+              <div>
+                <div class="font-semibold text-slate-900 text-sm">本地 FastAPI 后端模式 (Live)</div>
+                <p class="text-xs text-slate-500 mt-0.5">连接本地运行的 <code class="font-mono">uvicorn</code> 接口，实时调用 DeepSeek 与真实 MCP 服务。</p>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- API Endpoint 配置 -->
+        <div id="liveEndpointBox" class="space-y-2">
+          <label class="block text-xs font-semibold text-slate-700">后端 API 地址 (POST)</label>
+          <div class="flex gap-2">
+            <input id="apiEndpointInput" type="text" value="http://localhost:8000/api/chat" class="flex-1 px-3 py-2 rounded-xl border border-stone-300 font-mono text-xs focus:outline-none focus:border-teal-600" />
+            <button onclick="testBackendConnection()" class="px-3.5 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-slate-800 text-xs font-medium transition">
+              测试连通性
+            </button>
+          </div>
+          <p id="connectionTestResult" class="text-xs text-slate-500"></p>
+        </div>
+
+        <!-- FastAPI 桥接接口说明 -->
+        <div class="bg-slate-900 rounded-xl p-4 text-slate-200">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-mono text-amber-400">接口约定（已实现在 src/travel_agent/server.py）</span>
+            <button onclick="copyServerSnippet()" class="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 transition">
+              <i data-lucide="copy" class="w-3 h-3"></i>
+              <span id="copyBtnText">复制代码</span>
+            </button>
+          </div>
+          <pre id="serverCodeSnippet" class="text-[11px] font-mono leading-relaxed overflow-x-auto text-slate-300"># 启动桥接服务（项目根目录）
+uv run uvicorn travel_agent.server:app --reload --port 8000
+
+# 调用：session_id 即 LangGraph thread_id，多轮共享同一 checkpoint
+curl -X POST http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"帮我做一份东京5天的行程","session_id":"demo-1","real_only":false}'
+
+# 返回
+{"reply": "...", "status": "completed",
+ "session_id": "demo-1", "plan": null,
+ "traces": [{"tool": "itinerary_step", "action": "...", "result": "...", "latency": "1.2s"}],
+ "report": {"version": 1, "html_path": "output/...", "markdown_path": "output/...",
+            "created_at": "..."}}</pre>
+          <p class="text-[11px] text-slate-400 mt-2">健康检查：<code class="text-teal-300 font-mono">GET /api/health</code>；<code class="text-teal-300 font-mono">real_only=true</code> 等价于 CLI 的 <code class="text-teal-300 font-mono">--real-only</code>。</p>
+        </div>
+      </div>
+
+      <div class="px-6 py-3.5 bg-stone-50 border-t border-stone-200 flex justify-end">
+        <button onclick="toggleModal('settingsModal', false)" class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 transition">
+          完成并保存
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 全局轻提示 Toast -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-16 opacity-0 transition-all duration-300 pointer-events-none">
+    <div class="bg-slate-900 text-white text-xs font-medium px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2">
+      <i data-lucide="check-circle-2" class="w-4 h-4 text-teal-400"></i>
+      <span id="toastText">操作成功</span>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================
+    // 1. 状态与内置示范行程数据集
+    // ==========================================
+    const STATE = {
+      mode: 'demo', // 'demo' | 'live'
+      endpoint: 'http://localhost:8000/api/chat',
+      sessionId: 'TRV-' + Math.floor(1000 + Math.random() * 9000),
+      activeDayFilter: 'ALL',
+      version: 1,
+      currentPlan: null,
+      isGenerating: false
+    };
+
+    // 预置高质量示例行程数据（与 travel_agent 的结构化输出对齐）
+    const PRESET_PLANS = {
+      tokyo: {
+        id: 'tokyo-5d4n',
+        title: '东京建筑美学与在地风味 · 5天4晚深度慢游',
+        subtitle: '从表参道现代建筑群到谷根千下町烟火，兼顾设计感酒店与高口碑隐世食肆',
+        destination: '日本 · 东京 (Tokyo)',
+        duration: '5天4晚 (2026.12.04 - 12.08)',
+        travelers: '2位成人 · 城市文化与美食偏好',
+        totalBudget: 15000,
+        estimatedCost: 14280,
+        currency: 'CNY',
+        weatherSummary: '晴朗微凉 · 6°C ~ 14°C · 建议携带防风大衣与舒适步行鞋',
+        budgetBreakdown: [
+          { label: '往返机票', amount: 4600, color: 'bg-slate-800' },
+          { label: '精品住宿 (4晚)', amount: 5200, color: 'bg-amber-600' },
+          { label: '在地餐饮', amount: 2680, color: 'bg-orange-500' },
+          { label: '城际与地铁交通', amount: 850, color: 'bg-teal-600' },
+          { label: '美术馆与体验门票', amount: 950, color: 'bg-stone-500' }
+        ],
+        flights: [
+          {
+            direction: '去程 · 12月04日',
+            airline: '全日空航空 NH860',
+            route: 'HKG 09:35 → HND 14:25',
+            duration: '3h 50m · 直飞',
+            price: '¥2,320 /人含税',
+            selected: true
+          },
+          {
+            direction: '返程 · 12月08日',
+            airline: '全日空航空 NH859',
+            route: 'HND 17:10 → HKG 21:25',
+            duration: '4h 15m · 直飞',
+            price: '已含往返套票',
+            selected: true
+          }
+        ],
+        hotels: [
+          {
+            name: 'TRUNK(HOTEL) YOYOGI PARK',
+            area: '涩谷区 · 富谷（紧邻代代木公园）',
+            rating: '4.9',
+            nights: 4,
+            pricePerNight: 1300,
+            tags: ['无边泳池', '北欧极简木质设计', '步行8分钟至地铁'],
+            selected: true
+          },
+          {
+            name: 'ALL DAY PLACE SHIBUYA',
+            area: '涩谷区 · 宫下公园旁',
+            rating: '4.7',
+            nights: 4,
+            pricePerNight: 1120,
+            tags: ['交通枢纽', '精酿啤酒吧', '高性价比'],
+            selected: false
+          }
+        ],
+        days: [
+          {
+            day: 1,
+            date: '12月04日 · 周五',
+            theme: '抵达东京与涩谷夜色初探',
+            summary: '羽田机场快速入境，入住代代木公园旁设计酒店，漫步奥涩谷精品街区。',
+            activities: [
+              {
+                time: '15:30',
+                type: '交通',
+                title: '羽田机场 → 涩谷/代代木公园',
+                location: '京急机场线转山手线',
+                duration: '45分钟 · 约¥32',
+                desc: '推荐使用 Apple Pay 绑定 Suica 西瓜卡直接刷闸机进站，无需排队购票。',
+                tip: 'Amap/Transit 校验：避开17:30晚高峰换乘。'
+              },
+              {
+                time: '17:00',
+                type: '住宿',
+                title: '办理入住 TRUNK(HOTEL) YOYOGI PARK',
+                location: '神山町 1-15',
+                duration: '休息整顿',
+                desc: '办理入住后可前往顶层酒廊俯瞰代代木公园黄昏天际线。',
+                tip: '酒店提供免费手冲精品咖啡券。'
+              },
+              {
+                time: '19:30',
+                type: '美食',
+                title: '奥涩谷隐世居酒屋 · 炉端烧与清酒',
+                location: '富谷 1-9-18',
+                duration: '2小时 · 约¥380/人',
+                desc: '避开游客扎堆的中心街，在本地设计师聚集的奥涩谷享用炭烤时令海鲜与静冈县地酒。',
+                tip: '已核验营业时间：17:30 - 23:30，建议提前30分钟到店。'
+              }
+            ]
+          },
+          {
+            day: 2,
+            date: '12月05日 · 周六',
+            theme: '表参道现代建筑巡礼与青山艺术',
+            summary: '安藤忠雄、隈研吾与普拉达旗舰店建筑群漫步，午后探访根津美术馆庭园。',
+            activities: [
+              {
+                time: '09:30',
+                type: '美食',
+                title: 'Fuglen Tokyo 挪威浅烘咖啡早餐',
+                location: '富谷 1-16-11',
+                duration: '1小时 · 约¥85/人',
+                desc: '距离酒店步行仅3分钟，被《纽约时报》誉为“世界上最好的咖啡馆之一”。',
+                tip: '推荐点选肉桂卷配当季埃塞俄比亚手冲。'
+              },
+              {
+                time: '11:00',
+                type: '景点',
+                title: '表参道建筑群徒步（表参道之丘 → Prada青山店）',
+                location: '南青山 5-2-6',
+                duration: '2.5小时 · 免费街区漫步',
+                desc: '依次打卡安藤忠雄设计的表参道之丘、伊东丰雄 Tod’s 大楼以及赫尔佐格设计的菱形玻璃幕墙。',
+                tip: '路线距离 1.4km，步行串联无需乘车。'
+              },
+              {
+                time: '14:30',
+                type: '景点',
+                title: '根津美术馆与竹林枯山水庭园',
+                location: '南青山 6-5-1',
+                duration: '2小时 · 门票¥75/人',
+                desc: '隈研吾操刀的竹林长廊入口极具禅意，馆内收藏东亚古美术珍品，庭园内藏有四座茶室。',
+                tip: '馆内 NEZUCAFÉ 玻璃屋可一边赏红叶一边享用抹茶点心。'
+              },
+              {
+                time: '18:30',
+                type: '美食',
+                title: '南青山匠人手打荞麦面与天妇罗',
+                location: '南青山 3-14',
+                duration: '1.5小时 · 约¥260/人',
+                desc: '每日清晨石磨现磨荞麦粉，搭配北海道海胆与当季舞茸天妇罗。',
+                tip: '距根津美术馆步行 9 分钟。'
+              }
+            ]
+          },
+          {
+            day: 3,
+            date: '12月06日 · 周日',
+            theme: '六本木艺术金三角与东京塔夜景',
+            summary: '沉浸于国立新美术馆的波浪玻璃幕墙，傍晚登高俯瞰东京湾灯火。',
+            activities: [
+              {
+                time: '10:30',
+                type: '景点',
+                title: '国立新美术馆 (The National Art Center)',
+                location: '港区六本木 7-22-2',
+                duration: '2.5小时 · 建筑免费/特展¥90',
+                desc: '黑川纪章生前最后一件美术馆杰作，巨大的波浪形玻璃中庭倒锥体极具视觉震撼力。',
+                tip: '地铁千代田线乃木坂站 6 号出口直通美术馆。'
+              },
+              {
+                time: '14:00',
+                type: '景点',
+                title: '21_21 DESIGN SIGHT 设计美术馆',
+                location: '赤坂 9-7-6 (Tokyo Midtown)',
+                duration: '1.5小时 · 门票¥70',
+                desc: '由三宅一生与安藤忠雄联手打造，屋顶是一整块折叠的巨大铁板，专注呈现日常设计哲学。',
+                tip: '步行距国立新美术馆仅 7 分钟。'
+              },
+              {
+                time: '18:00',
+                type: '景点',
+                title: '麻布台之丘森JP塔观景台 · 东京塔同框',
+                location: '港区麻布台 1-3-1',
+                duration: '1.5小时 · 消费入场',
+                desc: '东京最新地标建筑群，在33层空中大堂近距离平视点亮暖橙色灯光的东京铁塔。',
+                tip: '日落前半小时抵达可同时拍摄蓝调时刻与夜景。'
+              }
+            ]
+          },
+          {
+            day: 4,
+            date: '12月07日 · 周一',
+            theme: '谷根千下町老街与上野文化森林',
+            summary: '穿越回昭和年代的谷中银座商店街，感受旧东京的人情味与猫街慢生活。',
+            activities: [
+              {
+                time: '10:00',
+                type: '景点',
+                title: '谷中银座与根津神社千本鸟居',
+                location: '台东区谷中 3-13-1',
+                duration: '3小时 · 免费',
+                desc: '在二战空袭中幸存的木造老街区，分布着百年仙贝铺、古民家咖啡馆和招财猫主题小店。',
+                tip: '推荐品尝现炸牛肉可乐饼与栗子蒙布朗。'
+              },
+              {
+                time: '15:00',
+                type: '景点',
+                title: '国立西洋美术馆（勒·柯布西耶世界遗产）',
+                location: '台东区上野公园 7-7',
+                duration: '2小时 · 门票¥50',
+                desc: '亚洲唯一由现代建筑大师柯布西耶设计的作品，前庭矗立着罗丹《地狱之门》原模青铜雕塑。',
+                tip: '周一常设展正常开放（部分特展周一休馆，已核验日程无冲突）。'
+              }
+            ]
+          },
+          {
+            day: 5,
+            date: '12月08日 · 周二',
+            theme: '代官山茑屋书店与从容返程',
+            summary: '在森林中的世界最美书店挑选设计伴手礼，随后搭乘电车前往羽田机场。',
+            activities: [
+              {
+                time: '10:00',
+                type: '景点',
+                title: '代官山 T-SITE 茑屋书店',
+                location: '涩谷区猿乐町 17-5',
+                duration: '2.5小时 · 免费',
+                desc: '由三栋白色编织外墙建筑组成，汇集全球绝版建筑杂志、黑胶唱片与限定文具。',
+                tip: '距离代代木公园打车约 10 分钟（约¥75）。'
+              },
+              {
+                time: '14:15',
+                type: '交通',
+                title: '涩谷站 → 羽田机场第3航站楼',
+                location: '山手线转京急空港快特',
+                duration: '45分钟 · 提前2.5小时抵达',
+                desc: '预留充足时间在羽田机场江户小路购买伴手礼并办理退税。',
+                tip: '航班 NH859 17:10 起飞。'
+              }
+            ]
+          }
+        ]
+      },
+      taipei: {
+        id: 'taipei-3d2n',
+        title: '香港→台北周末风味与老屋文创 · 3天2晚轻旅行',
+        subtitle: '仅需请假半天，从大稻埕百年红砖街屋到永康街巷弄牛肉面，高密度味蕾巡礼',
+        destination: '中国台湾 · 台北 (Taipei)',
+        duration: '3天2晚 (周五晚出发 - 周日晚返程)',
+        travelers: '2位成人 · 美食探索与独立书店',
+        totalBudget: 6800,
+        estimatedCost: 6320,
+        currency: 'CNY',
+        weatherSummary: '多云间晴 · 17°C ~ 23°C · 体感舒适，夜晚微风',
+        budgetBreakdown: [
+          { label: '港台往返机票', amount: 2400, color: 'bg-slate-800' },
+          { label: '设计旅店 (2晚)', amount: 1960, color: 'bg-amber-600' },
+          { label: '夜市与私房菜', amount: 1380, color: 'bg-orange-500' },
+          { label: '捷运与机场快线', amount: 320, color: 'bg-teal-600' },
+          { label: '伴手礼与茶空间', amount: 260, color: 'bg-stone-500' }
+        ],
+        flights: [
+          {
+            direction: '去程 · 周五傍晚',
+            airline: '国泰航空 CX472',
+            route: 'HKG 18:45 → TPE 20:35',
+            duration: '1h 50m · 直飞',
+            price: '¥1,200 /人含税',
+            selected: true
+          },
+          {
+            direction: '返程 · 周日晚间',
+            airline: '国泰航空 CX405',
+            route: 'TPE 20:50 → HKG 22:45',
+            duration: '1h 55m · 直飞',
+            price: '已含往返套票',
+            selected: true
+          }
+        ],
+        hotels: [
+          {
+            name: '二十轮旅店大安馆 (SWIIO Hotel Daan)',
+            area: '大安区 · 东丰街林荫大道旁',
+            rating: '4.8',
+            nights: 2,
+            pricePerNight: 980,
+            tags: ['纯白极简建筑', '近大安捷运站', '免费迷你吧'],
+            selected: true
+          }
+        ],
+        days: [
+          {
+            day: 1,
+            date: '周五 · Day 1',
+            theme: '夜抵台北与宁夏夜市宵夜开场',
+            summary: '桃园机场捷运直达市区，入住大安区纯白设计旅店后直奔老字号夜市。',
+            activities: [
+              {
+                time: '21:15',
+                type: '交通',
+                title: '桃园机场第一航站楼 → 台北车站',
+                location: '桃园机场捷运直达车',
+                duration: '35分钟 · 约¥35',
+                desc: '紫线直达车每15分钟一班，车厢内配备免费 Wi-Fi 与无线充电座。',
+                tip: '出关后沿“机场捷运”紫色指示牌步行3分钟即达。'
+              },
+              {
+                time: '22:30',
+                type: '美食',
+                title: '宁夏夜市老字号宵夜巡礼',
+                location: '大同区宁夏路',
+                duration: '1.5小时 · 约¥90/人',
+                desc: '打卡米其林必比登推荐的方家鸡肉饭、刘芋仔蛋黄芋饼与豆花庄古早味冰豆花。',
+                tip: '夜市营业至凌晨 01:00，周六凌晨前依然热闹。'
+              }
+            ]
+          },
+          {
+            day: 2,
+            date: '周六 · Day 2',
+            theme: '大稻埕百年街屋与永康街茶食漫步',
+            summary: '白天穿梭迪化街南北货与复古咖啡馆，傍晚在永康街品味台湾茶道与牛肉面。',
+            activities: [
+              {
+                time: '10:30',
+                type: '景点',
+                title: '大稻埕迪化街历史街区',
+                location: '大同区迪化街一段',
+                duration: '2.5小时 · 免费',
+                desc: '巴洛克式立面老屋与闽南三进式街屋并存，探访霞海城隍庙及隐藏在天井里的独立选物店。',
+                tip: '推荐在“森高砂咖啡馆”品尝台湾本地阿里山手冲咖啡。'
+              },
+              {
+                time: '14:00',
+                type: '美食',
+                title: '永康街红烧牛肉面与芒果雪花冰',
+                location: '大安区永康街',
+                duration: '2小时 · 约¥140/人',
+                desc: '避开12点正餐排队高峰，14点抵达老牌面馆享用半筋半肉红烧牛肉面，随后漫步青田街日式宿舍群。',
+                tip: '大稻埕乘捷运淡水信义线至东门站仅需 14 分钟。'
+              },
+              {
+                time: '19:00',
+                type: '美食',
+                title: '台菜私房料理 · 经典三杯鸡与乌鱼子炒饭',
+                location: '大安区东丰街',
+                duration: '2小时 · 约¥280/人',
+                desc: '步行即可返回酒店的林荫餐厅，用精致现代手法演绎传统酒家菜。',
+                tip: '距离二十轮旅店步行仅 4 分钟。'
+              }
+            ]
+          },
+          {
+            day: 3,
+            date: '周日 · Day 3',
+            theme: '松山文创园设计与凤梨酥伴手礼',
+            summary: '在老烟厂改造的文创园区看设计展，带着现烤凤梨酥从容前往机场。',
+            activities: [
+              {
+                time: '10:30',
+                type: '景点',
+                title: '松山文创园区 & 诚品生活松烟店',
+                location: '信义区光复南路 133 号',
+                duration: '3小时 · 免费入园',
+                desc: '巴洛克花园与工业风制烟工厂交融，24小时书店与黑胶音乐馆极适合午后阅读。',
+                tip: '可在园区内挑选台湾原住民手作工艺品作为伴手礼。'
+              },
+              {
+                time: '17:30',
+                type: '交通',
+                title: '台北车站预办登机 → 桃园机场返港',
+                location: 'A1 台北车站（国泰航空市区预办登机）',
+                duration: '45分钟',
+                desc: '可提前在台北车站托运行李，随后轻装前往机场免税店。',
+                tip: '航班 CX405 20:50 起飞。'
+              }
+            ]
+          }
+        ]
+      }
+    };
+
+    // ==========================================
+    // 2. 初始化与 UI 交互工具函数
+    // ==========================================
+    window.addEventListener('DOMContentLoaded', () => {
+      STATE.currentPlan = JSON.parse(JSON.stringify(PRESET_PLANS.tokyo));
+      document.getElementById('sessionIdBadge').textContent = `Session #${STATE.sessionId}`;
+      renderWelcomeMessage();
+      renderWorkbench();
+      lucide.createIcons();
+    });
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toastText').textContent = msg;
+      toast.classList.remove('translate-y-16', 'opacity-0');
+      setTimeout(() => {
+        toast.classList.add('translate-y-16', 'opacity-0');
+      }, 2600);
+    }
+
+    function toggleModal(modalId, show) {
+      const el = document.getElementById(modalId);
+      if (show) {
+        el.classList.remove('hidden');
+        el.classList.add('flex');
+      } else {
+        el.classList.add('hidden');
+        el.classList.remove('flex');
+      }
+    }
+
+    function switchMobileView(view) {
+      const chatPane = document.getElementById('chatPane');
+      const reportPane = document.getElementById('reportPane');
+      const btnChat = document.getElementById('mobileTabChat');
+      const btnReport = document.getElementById('mobileTabReport');
+
+      if (view === 'chat') {
+        chatPane.classList.remove('hidden');
+        chatPane.classList.add('flex');
+        reportPane.classList.add('hidden');
+        reportPane.classList.remove('flex');
+        btnChat.className = 'px-2.5 py-1 text-xs font-medium rounded-md bg-white text-slate-900 shadow-sm';
+        btnReport.className = 'px-2.5 py-1 text-xs font-medium rounded-md text-slate-600';
+      } else {
+        reportPane.classList.remove('hidden');
+        reportPane.classList.add('flex');
+        chatPane.classList.add('hidden');
+        chatPane.classList.remove('flex');
+        btnReport.className = 'px-2.5 py-1 text-xs font-medium rounded-md bg-white text-slate-900 shadow-sm';
+        btnChat.className = 'px-2.5 py-1 text-xs font-medium rounded-md text-slate-600';
+      }
+    }
+
+    function updateBackendMode(mode) {
+      STATE.mode = mode;
+      const badge = document.getElementById('modeBadge');
+      if (mode === 'live') {
+        badge.textContent = 'FastAPI 实时后端';
+        badge.className = 'font-medium text-teal-700';
+      } else {
+        badge.textContent = '演示沙盒模式';
+        badge.className = 'font-medium text-amber-700';
+      }
+    }
+
+    async function testBackendConnection() {
+      const url = document.getElementById('apiEndpointInput').value.trim();
+      STATE.endpoint = url;
+      const resultEl = document.getElementById('connectionTestResult');
+      resultEl.textContent = '正在探测本地 FastAPI 服务...';
+      resultEl.className = 'text-xs text-amber-600';
+      try {
+        const res = await fetch(url.replace('/api/chat', '/docs'), { method: 'GET', mode: 'no-cors' });
+        resultEl.textContent = '请求已发送。若本地 uvicorn 已启动在 8000 端口，即可直接对话！';
+        resultEl.className = 'text-xs text-teal-600';
+      } catch (err) {
+        resultEl.textContent = '无法连接至 ' + url + '，请确认已运行 uvicorn 服务，或先使用“演示沙盒模式”。';
+        resultEl.className = 'text-xs text-rose-600';
+      }
+    }
+
+    function copyServerSnippet() {
+      const text = document.getElementById('serverCodeSnippet').innerText;
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+      document.getElementById('copyBtnText').textContent = '已复制';
+      showToast('FastAPI 桥接代码已复制到剪贴板');
+      setTimeout(() => {
+        document.getElementById('copyBtnText').textContent = '复制代码';
+      }, 2000);
+    }
+
+    function startNewSession() {
+      STATE.sessionId = 'TRV-' + Math.floor(1000 + Math.random() * 9000);
+      STATE.version = 1;
+      document.getElementById('sessionIdBadge').textContent = `Session #${STATE.sessionId}`;
+      document.getElementById('chatMessages').innerHTML = '';
+      renderWelcomeMessage();
+      showToast(`已开启新会话 #${STATE.sessionId}`);
+    }
+
+    function prefillRevision() {
+      const input = document.getElementById('chatInput');
+      input.value = '帮我微调当前行程：把第2天的下午行程改得更轻松一些，并推荐一家附近的特色甜品店。';
+      input.focus();
+      switchMobileView('chat');
+    }
+
+    // ==========================================
+    // 3. LangGraph 状态机动画与对话逻辑
+    // ==========================================
+    function setPipelineStep(activeIndex, statusText) {
+      const nodes = document.querySelectorAll('.pipeline-node');
+      document.getElementById('pipelineStatusText').textContent = statusText;
+
+      nodes.forEach((node, idx) => {
+        const span = node.querySelector('span');
+        if (activeIndex === -1) {
+          // 全部完成状态
+          node.className = 'pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-teal-50/80 border border-teal-200 transition-all';
+          span.className = 'text-[10px] font-semibold text-teal-800 truncate w-full text-center';
+        } else if (idx < activeIndex) {
+          node.className = 'pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-teal-50/60 border border-teal-200/80 transition-all';
+          span.className = 'text-[10px] font-medium text-teal-700 truncate w-full text-center';
+        } else if (idx === activeIndex) {
+          node.className = 'pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-amber-100/90 border border-amber-400 shadow-2xs transition-all';
+          span.className = 'text-[10px] font-bold text-amber-900 truncate w-full text-center';
+        } else {
+          node.className = 'pipeline-node flex flex-col items-center p-1.5 rounded-lg bg-stone-50 border border-stone-200/60 transition-all';
+          span.className = 'text-[10px] font-medium text-slate-400 truncate w-full text-center';
+        }
+      });
+    }
+
+    function renderWelcomeMessage() {
+      const container = document.getElementById('chatMessages');
+      const welcomeHtml = `
+        <div class="bg-white rounded-2xl p-4 border border-stone-200/80 shadow-2xs space-y-2.5">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center text-xs font-bold">AI</span>
+            <span class="text-xs font-semibold text-slate-800">Travel Agent 工作台已就绪</span>
+            <span class="text-[11px] text-slate-400 ml-auto">DeepSeek + MCP</span>
+          </div>
+          <p class="text-xs text-slate-600 leading-relaxed">
+            你好！我已经为你替换了纯终端命令行交互。你可以直接告诉我<strong>目的地、天数、预算和偏好</strong>，或者在右侧看板基础上要求我<strong>增删景点、调整路线节奏、重新核算预算</strong>。
+          </p>
+          <div class="pt-1 flex flex-wrap gap-1.5 text-[11px] text-slate-500">
+            <span class="px-2 py-0.5 rounded bg-stone-100 border border-stone-200/60">✓ Brave Search 实时攻略</span>
+            <span class="px-2 py-0.5 rounded bg-stone-100 border border-stone-200/60">✓ 高德/地图通勤校验</span>
+            <span class="px-2 py-0.5 rounded bg-stone-100 border border-stone-200/60">✓ 机酒动态报价</span>
+          </div>
+        </div>
+      `;
+      container.insertAdjacentHTML('beforeend', welcomeHtml);
+    }
+
+    function appendUserMessage(text) {
+      const container = document.getElementById('chatMessages');
+      const html = `
+        <div class="flex justify-end">
+          <div class="max-w-[85%] bg-slate-900 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-xs leading-relaxed shadow-xs">
+            ${escapeHtml(text)}
+          </div>
+        </div>
+      `;
+      container.insertAdjacentHTML('beforeend', html);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function appendAssistantMessage(replyText, traces) {
+      const container = document.getElementById('chatMessages');
+      const traceId = 'trace-' + Date.now();
+      const traceItemsHtml = traces.map(t => `
+        <div class="flex items-start gap-2 text-[11px] py-1.5 border-b border-stone-100 last:border-none">
+          <span class="px-1.5 py-0.5 rounded font-mono text-[10px] bg-stone-100 text-slate-700 shrink-0">${escapeHtml(t.tool)}</span>
+          <div class="flex-1 min-w-0">
+            <div class="text-slate-700 font-medium truncate">${escapeHtml(t.action)}</div>
+            <div class="text-slate-400 text-[10px]">${escapeHtml(t.result)}</div>
+          </div>
+          <span class="text-teal-600 font-mono text-[10px] shrink-0">${escapeHtml(t.latency)}</span>
+        </div>
+      `).join('');
+
+      const html = `
+        <div class="bg-white rounded-2xl rounded-tl-sm p-4 border border-stone-200/90 shadow-2xs space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 text-white flex items-center justify-center">
+                <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+              </span>
+              <span class="text-xs font-semibold text-slate-900">Travel Agent 规划回复</span>
+            </div>
+            <span class="text-[11px] font-mono text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">v${STATE.version}.0 已更新</span>
+          </div>
+
+          <p class="text-xs text-slate-700 leading-relaxed whitespace-pre-line">${escapeHtml(replyText)}</p>
+
+          <!-- 可折叠 MCP 与工具调用日志 -->
+          <div class="border border-stone-200/80 rounded-xl bg-alabaster/70 overflow-hidden">
+            <button onclick="document.getElementById('${traceId}').classList.toggle('hidden')" class="w-full px-3 py-2 flex items-center justify-between text-[11px] font-medium text-slate-600 hover:bg-stone-100/70 transition">
+              <span class="flex items-center gap-1.5">
+                <i data-lucide="terminal" class="w-3.5 h-3.5 text-amber-600"></i>
+                <span>Agent 思考与 MCP 工具调用日志 (${traces.length} 步)</span>
+              </span>
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-slate-400"></i>
+            </button>
+            <div id="${traceId}" class="hidden px-3 pb-2.5 pt-1 border-t border-stone-200/60 bg-white">
+              ${traceItemsHtml}
+            </div>
+          </div>
+
+          <div class="pt-0.5 flex items-center justify-between">
+            <span class="text-[11px] text-slate-400">右侧可视化看板已同步最新数据</span>
+            <button onclick="switchMobileView('report')" class="lg:hidden text-xs font-semibold text-amber-700 flex items-center gap-1">
+              <span>查看行程看板</span>
+              <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        </div>
+      `;
+      container.insertAdjacentHTML('beforeend', html);
+      lucide.createIcons();
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function sendQuickPrompt(text) {
+      document.getElementById('chatInput').value = text;
+      handleChatSubmit(new Event('submit'));
+    }
+
+    async function handleChatSubmit(e) {
+      e.preventDefault();
+      if (STATE.isGenerating) return;
+      const input = document.getElementById('chatInput');
+      const prompt = input.value.trim();
+      if (!prompt) return;
+
+      input.value = '';
+      STATE.isGenerating = true;
+      document.getElementById('sendBtn').disabled = true;
+      appendUserMessage(prompt);
+
+      if (STATE.mode === 'live') {
+        await runLiveBackendTurn(prompt);
+      } else {
+        await runSimulatedTurn(prompt);
+      }
+
+      STATE.isGenerating = false;
+      document.getElementById('sendBtn').disabled = false;
+    }
+
+    async function runLiveBackendTurn(prompt) {
+      try {
+        setPipelineStep(0, '连接本地 FastAPI 后端...');
+        const response = await fetch(STATE.endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: STATE.sessionId, message: prompt })
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        setPipelineStep(-1, '已完成 · 已写入 SQLite');
+        STATE.version += 1;
+        if (data.plan) {
+          STATE.currentPlan = data.plan;
+          STATE.activeDayFilter = 'ALL';
+          renderWorkbench();
+        }
+        appendAssistantMessage(data.reply || '行程已更新。', data.traces || [
+          { tool: 'langgraph_runtime', action: '执行本地状态机节点', result: '已持久化至 travel_agent.sqlite3', latency: '1.2s' }
+        ]);
+      } catch (err) {
+        setPipelineStep(-1, '后端连接异常 · 已回退提示');
+        appendAssistantMessage(
+          `⚠️ 无法连接到本地后端 (${STATE.endpoint})。\n请确认已启动 FastAPI 桥接服务，或点击右上角“后端连接配置”切换回「演示沙盒模式」直接体验。`,
+          [{ tool: 'http_bridge', action: 'POST ' + STATE.endpoint, result: err.message, latency: '0.1s' }]
+        );
+      }
+    }
+
+    async function runSimulatedTurn(prompt) {
+      const stages = [
+        { idx: 0, text: '正在提取目的地、天数与预算约束...' },
+        { idx: 1, text: '正在调用 Brave Search 与地图 MCP...' },
+        { idx: 2, text: '正在校验动线耗时与营业时间...' },
+        { idx: 3, text: '正在聚合机票与酒店报价...' },
+        { idx: 4, text: '正在生成自适应结构化报告...' }
+      ];
+
+      for (const s of stages) {
+        setPipelineStep(s.idx, s.text);
+        await new Promise(r => setTimeout(r, 340));
+      }
+      setPipelineStep(-1, '完成 · 已同步至 travel_agent.sqlite3');
+
+      STATE.version += 1;
+      let reply = '';
+      let traces = [];
+
+      if (prompt.includes('台北') || prompt.includes('香港')) {
+        STATE.currentPlan = JSON.parse(JSON.stringify(PRESET_PLANS.taipei));
+        STATE.activeDayFilter = 'ALL';
+        reply = '已为你切换并生成【香港 → 台北 3天2晚周末风味与老屋文创】专属行程！\n\n本次方案精选周五傍晚国泰直飞航班，入住大安区纯白极简设计旅店（二十轮旅店），串联宁夏夜市、大稻埕百年街屋、永康街牛肉面与松烟文创园，双人总预算控制在 ¥6,320 左右。';
+        traces = [
+          { tool: 'requirements_node', action: '提取约束: 出发地=HKG, 目的地=TPE, 3天2晚', result: '结构化需求通过校验', latency: '180ms' },
+          { tool: 'flight_service', action: '检索 HKG ↔ TPE 周末晚班机', result: '锁定 CX472 / CX405 黄金时段', latency: '420ms' },
+          { tool: 'hotel_quote', action: '比价大安区高评分设计酒店', result: 'SWIIO Hotel Daan ¥980/晚', latency: '310ms' },
+          { tool: 'mobility_check', action: '校验桃园机捷与淡水信义线接驳', result: '所有跨区通勤 < 35分钟', latency: '210ms' }
+        ];
+      } else if (prompt.includes('调整') || prompt.includes('微调') || prompt.includes('第2天') || prompt.includes('修改')) {
+        // 动态修改当前行程的 Day 2，展示增量修订能力
+        const plan = STATE.currentPlan;
+        if (plan && plan.days && plan.days[1]) {
+          plan.days[1].theme = plan.days[1].theme + '（已按偏好轻松微调）';
+          plan.days[1].activities.push({
+            time: '16:45',
+            type: '美食',
+            title: '特调新增 · 隐世和风法式甜品沙龙 & 精品手冲',
+            location: '步行 5 分钟可达街角露台店',
+            duration: '1小时 · 约¥110/人',
+            desc: '根据你的微调指令新增的午后休憩站，主推当季白桃千层酥与现烤费南雪，避免连续步行疲劳。',
+            tip: 'Revision 引擎已自动重算前后景点步行时间，无行程冲突。'
+          });
+        }
+        STATE.activeDayFilter = 2;
+        reply = '已根据你的反馈对【Day 2】进行了定向微调！\n\n我在下午场次中为你插入了 1 小时的精品甜品与手冲咖啡休憩时段，缓解连续步行的疲劳感，同时保留了核心美术馆与晚餐动线。右侧工作台已自动定位到 Day 2 供你预览。';
+        traces = [
+          { tool: 'revision_node', action: '加载 SQLite 历史快照 v' + (STATE.version - 1), result: '定位目标节点: Day 2 下午时段', latency: '140ms' },
+          { tool: 'brave_search', action: '检索高评分顺路甜品/休憩空间', result: '筛选出步行 < 400m 的 3 家候选', latency: '490ms' },
+          { tool: 'route_contract', action: '重算 Day 2 时间窗与预算波动', result: '预算微增 ¥220，仍在总预算上限内', latency: '190ms' }
+        ];
+      } else {
+        STATE.currentPlan = JSON.parse(JSON.stringify(PRESET_PLANS.tokyo));
+        STATE.activeDayFilter = 'ALL';
+        reply = '已为你规划完成【东京建筑美学与在地风味 · 5天4晚深度慢游】方案！\n\n整体总预算核算为 ¥14,280（低于你的 ¥15,000 上限），住宿选定代代木公园旁的 TRUNK(HOTEL)，每日动线按街区聚合（奥涩谷 → 表参道/南青山 → 六本木/麻布台 → 谷根千/上野 → 代官山），确保每天地铁换乘不超过2次。';
+        traces = [
+          { tool: 'requirements_node', action: '提取约束: 东京 5天4晚, 预算 ¥15,000', result: '识别核心标签: 建筑美学、在地美食', latency: '160ms' },
+          { tool: 'brave_search', action: '检索东京建筑巡礼与美术馆周一闭馆规则', result: '已规避周一闭馆场馆', latency: '530ms' },
+          { tool: 'hotel_quote', action: '抓取涩谷/代代木设计酒店实时房价', result: 'TRUNK(HOTEL) 4晚共 ¥5,200', latency: '380ms' },
+          { tool: 'costs_orchestrator', action: '汇总机酒餐交五维预算矩阵', result: '预估总支出 ¥14,280 (结余 ¥720)', latency: '150ms' }
+        ];
+      }
+
+      renderWorkbench();
+      appendAssistantMessage(reply, traces);
+    }
+
+    // ==========================================
+    // 4. 渲染右侧可视化行程工作台 (Workbench)
+    // ==========================================
+    function renderWorkbench() {
+      const plan = STATE.currentPlan;
+      if (!plan) return;
+
+      document.getElementById('reportVersionBadge').textContent = `v${STATE.version}.0 · 已同步至报告引擎`;
+      const container = document.getElementById('workbenchContent');
+
+      const budgetPercent = Math.min(100, Math.round((plan.estimatedCost / plan.totalBudget) * 100));
+
+      // 预算分布条与图例
+      const budgetBarsHtml = plan.budgetBreakdown.map(b => {
+        const w = Math.max(6, Math.round((b.amount / plan.estimatedCost) * 100));
+        return `<div style="width: ${w}%" class="${b.color} h-full first:rounded-l-full last:rounded-r-full transition-all duration-500" title="${b.label}: ¥${b.amount}"></div>`;
+      }).join('');
+
+      const budgetLegendHtml = plan.budgetBreakdown.map(b => `
+        <div class="flex items-center justify-between text-xs py-1">
+          <span class="flex items-center gap-2 text-slate-600">
+            <span class="w-2.5 h-2.5 rounded-full ${b.color}"></span>
+            <span>${b.label}</span>
+          </span>
+          <span class="font-mono font-medium text-slate-800">¥${b.amount.toLocaleString()}</span>
+        </div>
+      `).join('');
+
+      // 航班与酒店卡片
+      const flightsHtml = plan.flights.map(f => `
+        <div class="p-3.5 rounded-xl border ${f.selected ? 'border-teal-600/40 bg-teal-50/20' : 'border-stone-200 bg-white'} flex items-center justify-between gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">${f.direction}</span>
+              <span class="text-xs font-semibold text-slate-900">${f.airline}</span>
+            </div>
+            <div class="text-sm font-bold text-slate-800 mt-1 font-mono">${f.route}</div>
+            <div class="text-[11px] text-slate-500 mt-0.5">${f.duration}</div>
+          </div>
+          <div class="text-right">
+            <div class="text-xs font-bold text-teal-700">${f.price}</div>
+            <span class="inline-flex items-center gap-1 text-[10px] text-teal-600 mt-1">
+              <i data-lucide="check-circle" class="w-3 h-3"></i> 已锁定方案
+            </span>
+          </div>
+        </div>
+      `).join('');
+
+      const hotelsHtml = plan.hotels.map(h => `
+        <div class="p-3.5 rounded-xl border ${h.selected ? 'border-amber-500/50 bg-amber-50/20' : 'border-stone-200 bg-white'} flex flex-col justify-between gap-2">
+          <div class="flex items-start justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs font-bold text-slate-900">${h.name}</span>
+                <span class="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">★ ${h.rating}</span>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-0.5">${h.area}</p>
+            </div>
+            <div class="text-right shrink-0">
+              <div class="text-sm font-bold font-mono text-slate-900">¥${h.pricePerNight}<span class="text-[11px] font-normal text-slate-500">/晚</span></div>
+              <div class="text-[10px] text-slate-400">共 ${h.nights} 晚 · ¥${(h.pricePerNight * h.nights).toLocaleString()}</div>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-1.5 pt-1">
+            ${h.tags.map(t => `<span class="text-[10px] px-2 py-0.5 rounded-full bg-white border border-stone-200 text-slate-600">${t}</span>`).join('')}
+          </div>
+        </div>
+      `).join('');
+
+      // 天数筛选 Tabs
+      const dayTabsHtml = `
+        <button onclick="setDayFilter('ALL')" class="px-3 py-1.5 rounded-xl text-xs font-medium transition ${STATE.activeDayFilter === 'ALL' ? 'bg-slate-900 text-white shadow-2xs' : 'bg-white text-slate-600 hover:bg-stone-100 border border-stone-200'}">
+          全部日程 (${plan.days.length}天)
+        </button>
+        ${plan.days.map(d => `
+          <button onclick="setDayFilter(${d.day})" class="px-3 py-1.5 rounded-xl text-xs font-medium transition ${STATE.activeDayFilter === d.day ? 'bg-amber-600 text-white shadow-2xs' : 'bg-white text-slate-600 hover:bg-stone-100 border border-stone-200'}">
+            Day ${d.day}
+          </button>
+        `).join('')}
+      `;
+
+      // 每日行程时间轴卡片
+      const filteredDays = STATE.activeDayFilter === 'ALL'
+        ? plan.days
+        : plan.days.filter(d => d.day === STATE.activeDayFilter);
+
+      const daysTimelineHtml = filteredDays.map(d => `
+        <div class="bg-white rounded-2xl border border-stone-200/90 shadow-2xs overflow-hidden">
+          <div class="px-5 py-4 bg-gradient-to-r from-stone-50 to-amber-50/30 border-b border-stone-200/70 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded-lg bg-slate-900 text-white text-xs font-bold font-mono">DAY 0${d.day}</span>
+                <span class="text-xs font-medium text-slate-500">${d.date}</span>
+              </div>
+              <h3 class="font-serif font-bold text-base text-slate-900 mt-1.5">${d.theme}</h3>
+            </div>
+            <p class="text-xs text-slate-600 max-w-md">${d.summary}</p>
+          </div>
+
+          <div class="p-5 space-y-4">
+            ${d.activities.map((act, idx) => {
+              const badgeStyle = getCategoryBadgeStyle(act.type);
+              return `
+                <div class="relative pl-6 pb-4 last:pb-0 border-l-2 border-stone-200 last:border-transparent">
+                  <span class="absolute -left-[7px] top-1 w-3 h-3 rounded-full bg-white border-2 ${badgeStyle.dot}"></span>
+                  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+                    <div class="flex items-center gap-2">
+                      <span class="font-mono text-xs font-bold text-slate-800">${act.time}</span>
+                      <span class="text-[11px] font-semibold px-2 py-0.5 rounded-md ${badgeStyle.bg}">${act.type}</span>
+                      <h4 class="text-sm font-bold text-slate-900">${act.title}</h4>
+                    </div>
+                    <span class="text-[11px] font-medium text-slate-500 bg-alabaster px-2 py-0.5 rounded border border-stone-200/70">${act.duration}</span>
+                  </div>
+                  <div class="text-xs text-slate-500 flex items-center gap-1 mb-1.5">
+                    <i data-lucide="map-pin" class="w-3 h-3 text-amber-600"></i>
+                    <span>${act.location}</span>
+                  </div>
+                  <p class="text-xs text-slate-700 leading-relaxed">${act.desc}</p>
+                  ${act.tip ? `
+                    <div class="mt-2 inline-flex items-center gap-1.5 text-[11px] text-teal-800 bg-teal-50/80 border border-teal-200/60 px-2.5 py-1 rounded-lg">
+                      <i data-lucide="lightbulb" class="w-3 h-3 text-teal-600 shrink-0"></i>
+                      <span>${act.tip}</span>
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `).join('');
+
+      container.innerHTML = `
+        <!-- 1. 杂志级封面头部卡片 -->
+        <div class="bg-white rounded-3xl border border-stone-200/90 shadow-xs overflow-hidden">
+          <div class="bg-gradient-to-br from-slate-900 via-slate-800 to-stone-900 p-6 sm:p-8 text-white relative overflow-hidden">
+            <div class="absolute right-0 top-0 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
+            <div class="relative z-10 space-y-3">
+              <div class="flex flex-wrap items-center gap-2 text-xs text-amber-300 font-medium">
+                <span class="px-2.5 py-0.5 rounded-full bg-white/10 backdrop-blur-xs border border-white/15">${plan.destination}</span>
+                <span>•</span>
+                <span>${plan.duration}</span>
+                <span>•</span>
+                <span>${plan.travelers}</span>
+              </div>
+              <h2 class="font-serif text-2xl sm:text-3xl font-bold tracking-tight leading-snug">${plan.title}</h2>
+              <p class="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">${plan.subtitle}</p>
+              <div class="pt-2 flex items-center gap-2 text-xs text-teal-300">
+                <i data-lucide="cloud-sun" class="w-4 h-4"></i>
+                <span>目的地气象与着装提示：${plan.weatherSummary}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 预算与交通住宿概览网格 -->
+          <div class="p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <!-- 左侧：预算拆解 -->
+            <div class="lg:col-span-5 flex flex-col justify-between bg-alabaster rounded-2xl p-4 border border-stone-200/70">
+              <div>
+                <div class="flex items-baseline justify-between">
+                  <span class="text-xs font-semibold text-slate-500">预估总预算核算</span>
+                  <span class="text-[11px] font-medium text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">预算内 (${budgetPercent}%)</span>
+                </div>
+                <div class="mt-1 flex items-baseline gap-2">
+                  <span class="text-2xl font-bold font-mono text-slate-900">¥${plan.estimatedCost.toLocaleString()}</span>
+                  <span class="text-xs text-slate-400">/ 上限 ¥${plan.totalBudget.toLocaleString()}</span>
+                </div>
+                <div class="w-full h-2.5 bg-stone-200 rounded-full flex overflow-hidden my-3">
+                  ${budgetBarsHtml}
+                </div>
+                <div class="divide-y divide-stone-200/60">
+                  ${budgetLegendHtml}
+                </div>
+              </div>
+            </div>
+
+            <!-- 右侧：机票与酒店报价单 -->
+            <div class="lg:col-span-7 space-y-4">
+              <div>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
+                  <i data-lucide="plane" class="w-3.5 h-3.5 text-teal-600"></i>
+                  <span>核验航班方案 (Flight Service)</span>
+                </h3>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  ${flightsHtml}
+                </div>
+              </div>
+
+              <div>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
+                  <i data-lucide="building-2" class="w-3.5 h-3.5 text-amber-600"></i>
+                  <span>精选住宿比价 (Hotel Quote)</span>
+                </h3>
+                <div class="space-y-2.5">
+                  ${hotelsHtml}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 每日行程时间轴筛选与明细 -->
+        <div class="space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h3 class="font-serif font-bold text-lg text-slate-900">逐日动线与时间轴</h3>
+            <div class="flex flex-wrap items-center gap-1.5">
+              ${dayTabsHtml}
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            ${daysTimelineHtml}
+          </div>
+        </div>
+      `;
+
+      lucide.createIcons();
+    }
+
+    function setDayFilter(day) {
+      STATE.activeDayFilter = day;
+      renderWorkbench();
+    }
+
+    function getCategoryBadgeStyle(type) {
+      switch (type) {
+        case '美食':
+          return { bg: 'bg-orange-100 text-orange-800', dot: 'border-orange-500' };
+        case '交通':
+          return { bg: 'bg-teal-100 text-teal-800', dot: 'border-teal-500' };
+        case '住宿':
+          return { bg: 'bg-amber-100 text-amber-800', dot: 'border-amber-600' };
+        default:
+          return { bg: 'bg-slate-100 text-slate-800', dot: 'border-slate-700' };
+      }
+    }
+
+    // ==========================================
+    // 5. 导出 Markdown 与独立 HTML 报告
+    // ==========================================
+    function exportMarkdownReport() {
+      const p = STATE.currentPlan;
+      if (!p) return;
+      let md = `# ${p.title}\n\n`;
+      md += `- **目的地**: ${p.destination}\n`;
+      md += `- **行程周期**: ${p.duration}\n`;
+      md += `- **出行人数**: ${p.travelers}\n`;
+      md += `- **预估总费用**: ¥${p.estimatedCost.toLocaleString()} (预算上限 ¥${p.totalBudget.toLocaleString()})\n\n`;
+      md += `## 每日详细行程\n\n`;
+
+      p.days.forEach(d => {
+        md += `### Day ${d.day} (${d.date}) · ${d.theme}\n`;
+        md += `> ${d.summary}\n\n`;
+        d.activities.forEach(a => {
+          md += `- **${a.time} [${a.type}] ${a.title}** (${a.location} · ${a.duration})\n`;
+          md += `  - ${a.desc}\n`;
+          if (a.tip) md += `  - *贴士*: ${a.tip}\n`;
+        });
+        md += `\n`;
+      });
+
+      downloadFile(`${p.id}-itinerary.md`, md, 'text/markdown;charset=utf-8');
+      showToast('Markdown 行程单已开始下载');
+    }
+
+    function exportHtmlReport() {
+      const p = STATE.currentPlan;
+      if (!p) return;
+      const content = document.getElementById('workbenchContent').innerHTML;
+      const htmlDoc = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>${p.title}</title>
+<script src="https://cdn.tailwindcss.com"><\/script>
+</head>
+<body class="bg-[#FAF9F6] text-slate-900 p-6 sm:p-10 max-w-4xl mx-auto">
+${content}
+</body>
+</html>`;
+      downloadFile(`${p.id}-report.html`, htmlDoc, 'text/html;charset=utf-8');
+      showToast('独立 HTML 旅行报告已导出');
+    }
+
+    function downloadFile(filename, content, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>
