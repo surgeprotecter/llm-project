@@ -117,3 +117,22 @@ def test_context_has_labelled_memory_and_recent_trips(database, settings) -> Non
     assert "不吃辣" in bundle.text and "来源: 用户自述" in bundle.text
     assert "<recent_trips>" in bundle.text and "成都" in bundle.text
     assert bundle.manifest.selected_trip_ids
+
+
+def test_update_memory_edits_content_and_value(database) -> None:
+    item = MemoryItem(user_id="u6", kind="preference", content="节奏紧凑（用户自述）", key="pace",
+                      structured_value={"value": "节奏紧凑"})
+    database.save_memory(item)
+
+    updated = database.update_memory(item.memory_id, "u6", content="节奏轻松一点", value="节奏轻松")
+    assert updated is not None
+    assert updated.content == "节奏轻松一点"
+    assert updated.structured_value["value"] == "节奏轻松"
+    assert updated.updated_at >= item.updated_at
+    assert database.get_memory(item.memory_id, "u6").content == "节奏轻松一点"
+
+    # Wrong owner and anonymous rows are untouched.
+    assert database.update_memory(item.memory_id, "someone-else", content="x") is None
+    # Empty content is rejected instead of wiping the record.
+    assert database.update_memory(item.memory_id, "u6", content="  ") is None
+    assert database.get_memory(item.memory_id, "u6").content == "节奏轻松一点"

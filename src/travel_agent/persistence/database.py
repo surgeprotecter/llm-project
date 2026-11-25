@@ -220,6 +220,36 @@ class Database:
         self.connection.commit()
         return cursor.rowcount > 0
 
+    def get_memory(self, memory_id: str, user_id: str | None = None) -> MemoryItem | None:
+        sql = "SELECT payload_json FROM memory_items WHERE memory_id = ?"
+        args: list[object] = [memory_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            args.append(user_id)
+        row = self.connection.execute(sql, args).fetchone()
+        if row is None:
+            return None
+        return MemoryItem.model_validate(json.loads(row["payload_json"]))
+
+    def update_memory(
+        self, memory_id: str, user_id: str | None = None, *, content: str | None = None,
+        value: str | None = None,
+    ) -> MemoryItem | None:
+        item = self.get_memory(memory_id, user_id)
+        if item is None:
+            return None
+        changes: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+        if content is not None:
+            text_value = content.strip()
+            if not text_value:
+                return None
+            changes["content"] = text_value
+        if value is not None and item.key:
+            changes["structured_value"] = {**item.structured_value, "value": value.strip()}
+        item = item.model_copy(update=changes)
+        self.save_memory(item)
+        return item
+
     def save_evidence(self, item: EvidenceItem) -> None:
         self.connection.execute(
             """

@@ -515,6 +515,30 @@ def list_memory(user_id: str = "default") -> dict[str, Any]:
     }
 
 
+class MemoryUpdate(BaseModel):
+    content: str | None = Field(default=None, max_length=500)
+    value: str | None = Field(default=None, max_length=120)
+
+
+@app.patch("/api/memory/{memory_id}")
+def update_memory_record(memory_id: str, req: MemoryUpdate, user_id: str = "default") -> dict[str, Any]:
+    """Correct one recorded preference; deleting is a separate explicit action."""
+    if req.content is not None and not req.content.strip():
+        raise HTTPException(status_code=400, detail="content cannot be empty")
+    with service._lock:
+        service._ensure_initialized(False)
+        item = service._database.update_memory(
+            memory_id, user_id, content=req.content, value=req.value,
+        )
+    if item is None:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return {
+        "memory_id": item.memory_id, "key": item.key, "content": item.content,
+        "value": item.structured_value.get("value"),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
 @app.delete("/api/memory/{memory_id}")
 def delete_memory(memory_id: str, user_id: str = "default") -> dict[str, Any]:
     """Forget one memory record (explicit user request only)."""

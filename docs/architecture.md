@@ -58,4 +58,5 @@
 - `travel_agent.memory.extract` 在每轮结束从用户原话里提取稳定偏好（饮食、节奏、预算、酒店偏好、称呼等）；只取第一人称自述，跳过转述与他人的话。模型显式调用 `remember` 仍可用，重复内容会被去重。
 - `travel_agent.memory.repository` 检索使用中文字符二元词 + BM25，再叠加新鲜度、重要度、置信度、阶段匹配，最后用 MMR（λ=0.7）去冗余；最多 6 条进入 `memory` 分区。
 - 行程结束（completed / waiting_for_user / blocked）写入一条 `kind="episode"` 的记忆：目的地、日期、人数、目标、已确认决策、已核实事实、未完成项；`recent_trips` 分区取最近 3 条，用于“继续上次”和多行程对照。
-- 接口：`GET /api/memory?user_id=default` 返回偏好与行程回顾；`DELETE /api/memory/{memory_id}` 仅在用户明确要求时删除。
+- 接口：`GET /api/memory?user_id=default` 返回偏好与行程回顾；`PATCH /api/memory/{memory_id}` 修正一条偏好的文本；`DELETE /api/memory/{memory_id}` 仅在用户明确要求时删除。
+- 前端顶栏「记忆」面板可查看偏好与行程回顾、行内修改偏好文本、删除单条记录；删除只影响长期记忆，不删除已生成的报告。
