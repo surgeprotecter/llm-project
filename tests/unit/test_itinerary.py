@@ -166,3 +166,20 @@ def test_preview_from_proposal_ignores_research_plans():
     trip = {"destinations": ["香港"], "duration_days": 1}
     proposal = "1. 知识扫盲：确认是否需要预约。\n2. 重点核实：用地图查港大本部。\n3. 餐饮核实：查西营盘餐厅。\n"
     assert preview_from_proposal(trip, proposal) is None
+
+
+def test_board_marks_unknown_budget_instead_of_one_yuan():
+    trip = {"destinations": ["香港"], "duration_days": 1, "traveler_count": 1}
+    workspace = {
+        "days": [{
+            "date": "2026-11-25", "city": "香港", "title": "港岛一日",
+            "stops": [{"name": "太平山顶", "kind": "sightseeing", "start_time": "09:00",
+                       "duration_minutes": 60}],
+        }],
+        "places": [], "transport": [], "hotel_regions": [],
+    }
+    itinerary = from_workspace(workspace, trip)
+    assert itinerary is not None
+    board = render_board(itinerary)
+    assert board["totalBudget"] is None
+    assert board["estimatedCost"] is None

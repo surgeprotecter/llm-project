@@ -38,7 +38,7 @@ _TABLE_ROW = re.compile(r"^\|")
 _TIME_CELL = re.compile(r"^\d{1,2}:\d{2}(?:[–~-]\d{1,2}:\d{2})?$")
 _CLOCK = re.compile(r"(\d{1,2}:\d{2})(?:\s*[–~-]\s*(\d{1,2}:\d{2}))?")
 _PERIOD_CELL = re.compile(r"^(" + "|".join(PERIODS) + r")$")
-_STEP_LINE = re.compile(r"^(?:\d+[.、)]|[-*])\s*(.*)$")
+_STEP_LINE = re.compile(r"^(?:\d+[.、)]|[-*•·])\s*(.*)$")
 _PERIOD_HEAD = re.compile(r"^\*\*\s*(" + "|".join(PERIODS) + r")\s*[：:]\s*(.+?)\s*\*\*\s*$")
 # "上午 9:00 中环出发" / "**上午：港大本部**"
 _BOLD = re.compile(r"^\*\*(.+?)\*\*\s*[：:]?\s*(.*)$")
@@ -46,6 +46,7 @@ _BOLD = re.compile(r"^\*\*(.+?)\*\*\s*[：:]?\s*(.*)$")
 _KIND_HINTS = (
     ("港铁", "交通"), ("地铁", "交通"), ("步行", "交通"), ("小轮", "交通"), ("巴士", "交通"),
     ("打车", "交通"), ("交通", "交通"), ("返程", "交通"), ("去程", "交通"),
+    ("缆车", "交通"), ("叮叮车", "交通"), ("电车", "交通"), ("出发", "交通"), ("集合", "交通"),
     ("午餐", "美食"), ("晚餐", "美食"), ("早餐", "美食"), ("用餐", "美食"), ("早饭", "美食"),
     ("晚饭", "美食"), ("宵夜", "美食"), ("吃饭", "美食"), ("餐饮", "美食"),
     ("茶餐厅", "美食"), ("餐", "美食"), ("点心", "美食"), ("咖啡", "美食"),
@@ -237,26 +238,34 @@ def stops_from_text(plan_text: str, limit: int = 14) -> list[Stop]:
         bold = _BOLD.match(body)
         label, rest = (bold.group(1).strip().rstrip("：:"), bold.group(2).strip()) if bold else ("", body)
         stamp = ""
-        clock = _CLOCK.search(f"{label} {rest}")
-        if clock:
-            stamp = f"{clock.group(1)}-{clock.group(2)}" if clock.group(2) else clock.group(1)
-        elif _PERIOD_CELL.match(label) or _PERIOD_CELL.match(rest):
-            stamp = label if _PERIOD_CELL.match(label) else rest
+        title = ""
+        note = ""
+        label_clock = _CLOCK.search(label)
+        rest_clock = None if label_clock else _CLOCK.search(rest)
+        if label_clock:
+            stamp = f"{label_clock.group(1)}-{label_clock.group(2)}" if label_clock.group(2) else label_clock.group(1)
+            title = (label[:label_clock.start()] + " " + label[label_clock.end():]).strip(" -—·:：")
+        elif rest_clock:
+            stamp = f"{rest_clock.group(1)}-{rest_clock.group(2)}" if rest_clock.group(2) else rest_clock.group(1)
+            title = (rest[:rest_clock.start()] + " " + rest[rest_clock.end():]).strip(" -—·:：")
+            rest = ""
+        elif _PERIOD_CELL.match(label):
+            stamp = label
         else:
-            period = re.match(r"^(" + "|".join(PERIODS) + r")\s*(.*)$", rest)
+            period = re.match(r"^(" + "|".join(PERIODS) + r")\s*(.*)$", rest) if rest else None
             if period:
-                stamp, rest = period.group(1), period.group(2)
+                stamp = period.group(1)
+                rest = period.group(2).strip()
         if not stamp:
             continue
-        name = rest
-        clock_head = _CLOCK.match(rest.strip())
-        if clock_head:
-            name = rest.strip()[clock_head.end():].strip()
+        if title:
+            # "**08:30-09:00 中环集合出发**：从中环地铁站…" -> 中环集合出发 + note
+            note = rest
         else:
-            head = re.match(r"^(" + "|".join(PERIODS) + r")\s*", rest)
-            if head:
-                name = rest[head.end():].strip()
-        steps.append(_stop_from_text(stamp, name or rest, "" if label in {"", stamp} else label))
+            title, _, tail = rest.partition("：")
+            title = re.sub(r"^(" + "|".join(PERIODS) + r")\s*", "", title.strip()).strip()
+            note = tail.strip() or ("" if not rest else "")
+        steps.append(_stop_from_text(stamp, title, note))
         if len(steps) >= limit:
             return steps
     if steps:
@@ -509,10 +518,10 @@ def render_board(itinerary: Itinerary) -> dict[str, Any]:
         "destination": itinerary.destination or "待确认",
         "duration": f"{itinerary.duration_days} 天",
         "travelers": f"{itinerary.traveler_count} 位旅行者",
-        "totalBudget": itinerary.total_budget or estimated or 0,
-        "estimatedCost": estimated or itinerary.total_budget or 0,
+        "totalBudget": itinerary.total_budget or None,
+        "estimatedCost": estimated or None,
         "currency": itinerary.currency,
-        "weatherSummary": itinerary.weather_summary,
+        "weatherSummary": itinerary.weather_summary or "",
         "budgetBreakdown": breakdown,
         "flights": [{
             "direction": flight.direction, "airline": flight.airline,
@@ -574,6 +583,17 @@ def render_chat(itinerary: Itinerary) -> str:
     return "\n".join(lines).strip()
 
 
+def _destination_from_text(text: str) -> str:
+    match = re.search(r"([一-鿿]{2,8}?)(?:一日游|两日游|二日游|三日游|日游|行程规划)", str(text or ""))
+    if not match:
+        return ""
+    name = match.group(1)
+    for prefix in ("以下是", "这是", "下面", "这份", "该", "本"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    return name.lstrip("是去往到为的")
+
+
 def preview_from_proposal(trip: dict[str, Any] | None, proposal: str) -> Itinerary | None:
     """Board preview of an approved/pending proposal before execution finishes.
 
@@ -586,7 +606,8 @@ def preview_from_proposal(trip: dict[str, Any] | None, proposal: str) -> Itinera
     if len(stops) < 2:
         return None
     fields = _trip_fields(trip)
-    destination = fields["destination"] or "待确认"
+    destination = fields["destination"] or _destination_from_text(proposal) or "待确认"
+    fields["destination"] = destination
     return Itinerary(
         **fields,
         title=f"{destination}行程（待执行）",

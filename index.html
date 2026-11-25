@@ -1419,13 +1419,19 @@ curl -X POST http://localhost:8000/api/chat \
       plan.flights = plan.flights || [];
       plan.hotels = plan.hotels || [];
       plan.days = plan.days || [];
-      plan.estimatedCost = plan.estimatedCost || plan.totalBudget || 0;
-      plan.totalBudget = plan.totalBudget || plan.estimatedCost || 1;
+      plan.estimatedCost = Number(plan.estimatedCost) || 0;
+      plan.totalBudget = Number(plan.totalBudget) || 0;
+      const hasBudgetLimit = plan.totalBudget > 0;
 
       document.getElementById('reportVersionBadge').textContent = `v${STATE.version}.0 · 已同步至报告引擎`;
       const container = document.getElementById('workbenchContent');
 
-      const budgetPercent = Math.min(100, Math.round((plan.estimatedCost / plan.totalBudget) * 100));
+      const budgetPercent = hasBudgetLimit
+        ? Math.min(100, Math.round((plan.estimatedCost / plan.totalBudget) * 100))
+        : 0;
+
+      const budgetLimitHtml = plan.estimatedCost > 0 ? `¥${plan.estimatedCost.toLocaleString()}` : (hasBudgetLimit ? '未核算' : '—');
+      const budgetSubHtml = hasBudgetLimit ? `/ 上限 ¥${plan.totalBudget.toLocaleString()}` : '/ 未设置总预算';
 
       // 预算分布条与图例
       const budgetBarsHtml = plan.budgetBreakdown.map(b => {
@@ -1563,7 +1569,7 @@ curl -X POST http://localhost:8000/api/chat \
               <p class="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">${plan.subtitle}</p>
               <div class="pt-2 flex items-center gap-2 text-xs text-teal-300">
                 <i data-lucide="cloud-sun" class="w-4 h-4"></i>
-                <span>目的地气象与着装提示：${plan.weatherSummary}</span>
+                <span>目的地气象与着装提示：${plan.weatherSummary || '暂无天气数据，出行前请再确认'}</span>
               </div>
             </div>
           </div>
@@ -1575,17 +1581,17 @@ curl -X POST http://localhost:8000/api/chat \
               <div>
                 <div class="flex items-baseline justify-between">
                   <span class="text-xs font-semibold text-slate-500">预估总预算核算</span>
-                  <span class="text-[11px] font-medium text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full">预算内 (${budgetPercent}%)</span>
+                  <span class="text-[11px] font-medium px-2 py-0.5 rounded-full ${hasBudgetLimit ? 'text-teal-700 bg-teal-50' : 'text-slate-600 bg-stone-100'}">${hasBudgetLimit ? `预算内 (${budgetPercent}%)` : '预算不限'}</span>
                 </div>
                 <div class="mt-1 flex items-baseline gap-2">
-                  <span class="text-2xl font-bold font-mono text-slate-900">¥${plan.estimatedCost.toLocaleString()}</span>
-                  <span class="text-xs text-slate-400">/ 上限 ¥${plan.totalBudget.toLocaleString()}</span>
+                  <span class="text-2xl font-bold font-mono text-slate-900">${budgetLimitHtml}</span>
+                  <span class="text-xs text-slate-400">${budgetSubHtml}</span>
                 </div>
                 <div class="w-full h-2.5 bg-stone-200 rounded-full flex overflow-hidden my-3">
-                  ${budgetBarsHtml}
+                  ${budgetBarsHtml || '<div class="w-full h-full bg-stone-200/70"></div>'}
                 </div>
                 <div class="divide-y divide-stone-200/60">
-                  ${budgetLegendHtml}
+                  ${budgetLegendHtml || '<div class="text-[11px] text-slate-400 py-1">还没有费用拆分。</div>'}
                 </div>
               </div>
             </div>
@@ -1661,7 +1667,9 @@ curl -X POST http://localhost:8000/api/chat \
       md += `- **目的地**: ${p.destination}\n`;
       md += `- **行程周期**: ${p.duration}\n`;
       md += `- **出行人数**: ${p.travelers}\n`;
-      md += `- **预估总费用**: ¥${p.estimatedCost.toLocaleString()} (预算上限 ¥${p.totalBudget.toLocaleString()})\n\n`;
+      md += `- **预估总费用**: ${p.estimatedCost > 0 ? `¥${p.estimatedCost.toLocaleString()}` : '未核算'}${p.totalBudget > 0 ? ` (预算上限 ¥${p.totalBudget.toLocaleString()})` : ' (未设置预算上限)'}
+
+`;
       md += `## 每日详细行程\n\n`;
 
       p.days.forEach(d => {
