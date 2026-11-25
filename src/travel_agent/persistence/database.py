@@ -178,16 +178,47 @@ class Database:
         )
         self.connection.commit()
 
-    def list_memories(self, user_id: str, trip_id: str | None = None) -> list[MemoryItem]:
+    def list_memories(
+        self, user_id: str, trip_id: str | None = None, *, include_inactive: bool = False
+    ) -> list[MemoryItem]:
+        active = "" if include_inactive else " AND is_active = 1"
         rows = self.connection.execute(
-            """
+            f"""
             SELECT payload_json FROM memory_items
-            WHERE user_id = ? AND is_active = 1 AND (trip_id IS NULL OR trip_id = ?)
+            WHERE user_id = ?{active} AND (trip_id IS NULL OR trip_id = ?)
             ORDER BY created_at DESC
             """,
             (user_id, trip_id),
         ).fetchall()
         return [MemoryItem.model_validate(json.loads(row["payload_json"])) for row in rows]
+
+    def list_all_memories(self, user_id: str, *, include_inactive: bool = False) -> list[MemoryItem]:
+        active = "" if include_inactive else " AND is_active = 1"
+        rows = self.connection.execute(
+            f"SELECT payload_json FROM memory_items WHERE user_id = ?{active} ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [MemoryItem.model_validate(json.loads(row["payload_json"])) for row in rows]
+
+    def deactivate_memory(self, memory_id: str, user_id: str | None = None) -> bool:
+        sql = "UPDATE memory_items SET is_active = 0 WHERE memory_id = ?"
+        args: list[object] = [memory_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            args.append(user_id)
+        cursor = self.connection.execute(sql, args)
+        self.connection.commit()
+        return cursor.rowcount > 0
+
+    def delete_memory(self, memory_id: str, user_id: str | None = None) -> bool:
+        sql = "DELETE FROM memory_items WHERE memory_id = ?"
+        args: list[object] = [memory_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            args.append(user_id)
+        cursor = self.connection.execute(sql, args)
+        self.connection.commit()
+        return cursor.rowcount > 0
 
     def save_evidence(self, item: EvidenceItem) -> None:
         self.connection.execute(

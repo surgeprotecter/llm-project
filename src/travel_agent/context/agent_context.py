@@ -240,6 +240,13 @@ def build_agent_messages(database, settings, state, policy, catalog, skills, def
     trip = state["_trip"]
     scope = state.get("request_scope", {})
     advisory = scope.get("scenario") in {"answer", "compare", "lookup"}
+    from travel_agent.memory import MemoryRepository
+
+    memory_repository = MemoryRepository(database)
+    memory_items = memory_repository.candidates(
+        trip.user_id, trip.trip_id, state.get("current_query", ""), scope.get("scenario")
+    )[:6]
+    episodes = memory_repository.episodes(trip.user_id, limit=3)
     sections = {
         "runtime": {
             "current_date": datetime.now(ZoneInfo("Asia/Hong_Kong")).date().isoformat(),
@@ -257,10 +264,24 @@ def build_agent_messages(database, settings, state, policy, catalog, skills, def
         "capabilities": catalog,
         "skills": [{"name": s["name"], "description": s["description"]} for s in skills.values()],
         "memory": [
-            {"kind": m.kind, "content": m.content[:240]}
-            for m in database.list_memories(trip.user_id, trip.trip_id)[:6]
+            {"kind": m.kind, "key": m.key, "content": m.content[:240], "source": m.source,
+             "origin": "user" if m.source == "user" else m.source}
+            for m in memory_items
         ],
     }
+    if episodes:
+        sections["recent_trips"] = [
+            {
+                "trip": item.structured_value.get("title"),
+                "dates": [item.structured_value.get("start_date"), item.structured_value.get("end_date")],
+                "travelers": item.structured_value.get("travelers"),
+                "goals": (item.structured_value.get("goals") or [])[:2],
+                "decisions": (item.structured_value.get("decisions") or [])[:3],
+                "open_items": (item.structured_value.get("open_items") or [])[:3],
+                "status": item.structured_value.get("status"),
+            }
+            for item in episodes
+        ]
     if advisory:
         for key in ("active_goal", "root_goal", "task_plan", "semantic_summary"):
             sections.pop(key, None)
@@ -358,7 +379,7 @@ def build_agent_messages(database, settings, state, policy, catalog, skills, def
             },
         }
     # Stable capability/skill metadata precedes state that changes after each call.
-    stable_keys = ("runtime", "capabilities", "skills", "memory")
+    stable_keys = tuple(k for k in ("runtime", "capabilities", "skills", "memory", "recent_trips") if k in sections)
     sections = {**{k: sections[k] for k in stable_keys}, **{k: v for k, v in sections.items() if k not in stable_keys}}
     # Reserve the actual bound schemas; never silently drop the capability catalog.
     schema_tokens = conservative_tokens(dump(definitions))

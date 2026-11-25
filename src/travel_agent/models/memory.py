@@ -13,6 +13,9 @@ class MemoryItem(BaseModel):
     trip_id: str | None = None
     kind: Literal["preference", "decision", "episode", "procedure", "fact"] = "fact"
     content: str
+    # Semantic slot for long-term preferences, e.g. diet.spicy / pace.relaxed.
+    # Empty for free-form memories such as episodes.
+    key: str = ""
     structured_value: dict[str, Any] = Field(default_factory=dict)
     source: Literal["user", "tool", "inferred", "system"] = "user"
     confidence: float = 1.0
@@ -20,6 +23,7 @@ class MemoryItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
     phase: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     valid_until: datetime | None = None
     supersedes: str | None = None
     is_active: bool = True

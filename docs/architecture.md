@@ -51,3 +51,11 @@
   正文补齐执行阶段只核实了少数地点的单日行程。
 - 聊天正文、看板、HTML 报告因此来自同一组 `Day/Stop`，不会出现「左边排了 5 段、右边只有 1 个
   景点」的分叉。价格、评分等仍标注为候选或参考价。
+
+## 记忆系统（长期偏好 + 行程回顾）
+
+- 偏好按语义槽保存：`MemoryItem.key`（如 `diet.spicy`、`pace`、`budget.level`、`profile.name`），值放在 `structured_value["value"]`。同槽同值只刷新置信度与时间；同槽换值写新条目并 `supersedes` 旧条目、旧条目停用。
+- `travel_agent.memory.extract` 在每轮结束从用户原话里提取稳定偏好（饮食、节奏、预算、酒店偏好、称呼等）；只取第一人称自述，跳过转述与他人的话。模型显式调用 `remember` 仍可用，重复内容会被去重。
+- `travel_agent.memory.repository` 检索使用中文字符二元词 + BM25，再叠加新鲜度、重要度、置信度、阶段匹配，最后用 MMR（λ=0.7）去冗余；最多 6 条进入 `memory` 分区。
+- 行程结束（completed / waiting_for_user / blocked）写入一条 `kind="episode"` 的记忆：目的地、日期、人数、目标、已确认决策、已核实事实、未完成项；`recent_trips` 分区取最近 3 条，用于“继续上次”和多行程对照。
+- 接口：`GET /api/memory?user_id=default` 返回偏好与行程回顾；`DELETE /api/memory/{memory_id}` 仅在用户明确要求时删除。

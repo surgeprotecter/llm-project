@@ -737,8 +737,49 @@ class RuntimeEngine:
                        pending_plan=pending, unpresented_plan=revision, delivery_feedback={}, needs_action=False)
         if not state.get("export_source"):
             self.save({**state, **changes})
+        self.remember_turn({**state, **changes}, status)
         self.event(state, "agent.turn_finished", {"decision": decision, "run_status": status})
         return changes
+
+    def remember_turn(self, state, status: str) -> None:
+        """Persist stable preferences and one episode per trip; never fail the turn."""
+        from travel_agent.memory import MemoryRepository
+        from travel_agent.memory.episode import build_episode
+        from travel_agent.memory.extract import extract_memories
+
+        if state.get("export_source"):
+            return
+        try:
+            repository = MemoryRepository(self.db)
+            query = str(state.get("current_query") or "")
+            scope = state.get("request_scope") or {}
+            for item in extract_memories(
+                query,
+                user_id=str(state.get("user_id") or "default"),
+                trip_id=state.get("trip_id"),
+                phase=scope.get("scenario"),
+            ):
+                saved = repository.remember(item)
+                self.event(state, "memory.saved", {
+                    "memory_id": saved.memory_id, "key": saved.key, "kind": saved.kind,
+                    "supersedes": saved.supersedes, "content": saved.content[:120],
+                })
+            if status not in {"completed", "waiting_for_user", "blocked"}:
+                return
+            episode = build_episode(state, status=status)
+            if episode is None:
+                return
+            for existing in repository.episodes(str(state.get("user_id") or "default"), limit=50):
+                if existing.trip_id == episode.trip_id:
+                    episode.memory_id = existing.memory_id
+                    break
+            repository.save(episode)
+            self.event(state, "memory.episode", {"trip_id": episode.trip_id, "status": status})
+        except Exception as exc:  # memory is auxiliary; a failure must not block delivery
+            try:
+                self.event(state, "memory.error", {"error": str(exc)[:200]})
+            except Exception:
+                pass
 
     def evidence_reply(self, state):
         """Answer directly from the last successful lookup when the reply check cannot pass."""
@@ -1093,7 +1134,12 @@ class RuntimeEngine:
                     result["conflict"] = {"calendar_days": actual_days, "requested_days": trip.duration_days}
             return result
         if name == "remember":
-            self.db.save_memory(MemoryItem(user_id=trip.user_id, content=args["content"], kind=args["kind"], source="user"))
+            item = MemoryItem(user_id=trip.user_id, content=args["content"], kind=args["kind"], source="user")
+            from travel_agent.memory import MemoryRepository
+            repository = MemoryRepository(self.db)
+            if not any(row.content.strip() == item.content.strip()
+                       for row in self.db.list_all_memories(item.user_id)):
+                repository.remember(item)
             return {"success": True, "remembered": args["content"]}
         if name in {"itinerary_step", "export_report"}:
             if name == "export_report" and state["request_scope"]["artifact"] == "report_copy":

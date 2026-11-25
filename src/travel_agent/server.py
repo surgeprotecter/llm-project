@@ -490,6 +490,40 @@ def plan_state(session_id: str) -> dict[str, Any]:
     return {"plan": plan}
 
 
+@app.get("/api/memory")
+def list_memory(user_id: str = "default") -> dict[str, Any]:
+    """Long-term memory for the user, grouped for the UI."""
+    with service._lock:
+        service._ensure_initialized(False)
+        items = service._database.list_all_memories(user_id, include_inactive=False)
+    preferences = [item for item in items if item.kind != "episode"]
+    episodes = sorted((item for item in items if item.kind == "episode"),
+                      key=lambda item: item.created_at, reverse=True)
+    return {
+        "user_id": user_id,
+        "preferences": [{
+            "memory_id": item.memory_id, "key": item.key, "kind": item.kind,
+            "content": item.content, "value": item.structured_value.get("value"),
+            "confidence": item.confidence, "importance": item.importance,
+            "updated_at": item.updated_at.isoformat(),
+            "supersedes": item.supersedes,
+        } for item in preferences],
+        "episodes": [{
+            "memory_id": item.memory_id, "trip_id": item.trip_id, "content": item.content,
+            "summary": item.structured_value, "created_at": item.created_at.isoformat(),
+        } for item in episodes[:10]],
+    }
+
+
+@app.delete("/api/memory/{memory_id}")
+def delete_memory(memory_id: str, user_id: str = "default") -> dict[str, Any]:
+    """Forget one memory record (explicit user request only)."""
+    with service._lock:
+        service._ensure_initialized(False)
+        removed = service._database.delete_memory(memory_id, user_id)
+    return {"deleted": removed, "memory_id": memory_id}
+
+
 @app.post("/api/cancel")
 def cancel_turn(session_id: str = "") -> dict[str, Any]:
     """Ask the running turn of this session to stop at the next safe boundary."""
