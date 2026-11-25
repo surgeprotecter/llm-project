@@ -75,6 +75,56 @@ def _mode(value):
     value = str(value or "").lower()
     return _ALIASES.get(value, value)
 
+_RAIL_COUNTRIES = {"CN", "HK", "MO"}
+_COUNTRY_ALIASES = {
+    "香港": "HK",
+    "香港特别行政区": "HK",
+    "hong kong": "HK",
+    "hongkong": "HK",
+    "hk": "HK",
+    "澳门": "MO",
+    "澳门特别行政区": "MO",
+    "macau": "MO",
+    "macao": "MO",
+    "mo": "MO",
+    "中国": "CN",
+    "中国大陆": "CN",
+    "内地": "CN",
+    "china": "CN",
+    "mainland china": "CN",
+}
+
+
+def country_code(name):
+    """Best-effort ISO alpha-2 code for an origin/city name."""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    if text in _COUNTRY_ALIASES:
+        return _COUNTRY_ALIASES[text]
+    key = text.lower()
+    if key in _COUNTRY_ALIASES:
+        return _COUNTRY_ALIASES[key]
+    try:
+        import pycountry
+
+        try:
+            return pycountry.countries.lookup(text).alpha_2
+        except LookupError:
+            pass
+        matches = pycountry.countries.search_fuzzy(text)
+        return matches[0].alpha_2 if matches else ""
+    except (ImportError, LookupError, AttributeError, IndexError):
+        return ""
+
+
+def city_matches(value, city):
+    left, right = str(value or "").strip(), str(city or "").strip()
+    if not left or not right:
+        return False
+    return left in right or right in left
+
+
 
 def _clock(value):
     match = re.search(r"(?<!\d)([0-2]?\d):([0-5]\d)(?!\d)", str(value or ""))
@@ -158,7 +208,16 @@ def _edges(planner, stays, boundary_only):
                 date.fromisoformat(start) + timedelta(days=int(stay["start_day"]) - 1)
             ).isoformat()
     origin = _city(getattr(planner.trip, "origin", None), cities)
-    origin.setdefault("country_code", geo.get("origin_country_code"))
+    origin_country = (
+        str(origin.get("country_code") or "").upper()
+        or str(geo.get("origin_country_code") or "").upper()
+        or str(country_code(origin.get("city")) or "").upper()
+    )
+    if not origin_country and str(geo.get("entry_mode") or "").lower() in {"", "rail", "bus", "car"}:
+        # Same-country land routes inherit the destination country: mainland city names are not
+        # in pycountry, so 北京→上海 would otherwise lose its country code and skip 12306.
+        origin_country = str(geo.get("country_code") or "").upper()
+    origin["country_code"] = origin_country
     chain, result = [origin, *stays, origin], []
     for index, (source, target) in enumerate(zip(chain, chain[1:])):
         kind = "entry" if index == 0 else "exit" if index == len(chain) - 2 else "intercity"
@@ -371,7 +430,7 @@ class _Research:
             overrides = policy.get("edges") if isinstance(policy.get("edges"), dict) else {}
             explicit = overrides.get(edge["id"]) or policy.get(key) or geo.get(key)
             mode = _mode(explicit or item.get("mode"))
-            edge["mode"] = mode if mode in _MODES else "rail" if self.domestic(edge) else "bus"
+            edge["mode"] = mode if mode in _MODES else self.default_mode(edge)
             edge["type"] = _LABELS[edge["mode"]]
             available = self.saved_for_edge(edge)
             refs = item.get("flight_refs")
@@ -383,18 +442,72 @@ class _Research:
                     edge[key] = candidate
 
     @staticmethod
+    def rail_capable(edge):
+        """12306 covers mainland China plus Hong Kong West Kowloon/Macau connections."""
+        countries = {str(edge[v].get("country_code", "")).upper() for v in ("from", "to")}
+        return bool(countries) and countries <= _RAIL_COUNTRIES and "CN" in countries
+
+    @staticmethod
     def domestic(edge):
-        return all(str(edge[v].get("country_code", "")).upper() == "CN" for v in ("from", "to"))
+        return MobilityPlanner.rail_capable(edge)
+
+    def default_mode(self, edge):
+        if self.rail_capable(edge):
+            return "rail"
+        return "flight" if edge["kind"] in {"entry", "exit", "intercity"} else "bus"
 
     def provider(self, edge):
         if not edge["date"] or not edge["origin"] or not edge["destination"]:
             return
-        if edge["mode"] == "rail" and self.domestic(edge):
-            self.rail(edge)
-        elif edge["mode"] == "flight":
+        mode = edge.get("mode") or self.default_mode(edge)
+        edge["mode"] = mode
+        if mode == "rail":
+            if not self.rail_capable(edge):
+                self.gap(
+                    edge,
+                    "铁路查询只覆盖中国内地与香港/澳门之间的线路；当前出发地国家码未知或该线路未开通铁路。",
+                )
+                return
+            if not self.rail(edge):
+                self.gap(edge, "12306 未返回可售车次：可能未开售、无票，或城市名未匹配到车站。")
+        elif mode == "flight":
             self.flight(edge)
 
+    def saved_rail(self, edge):
+        """Reuse an already fetched 12306 response for the same city pair and date."""
+        wanted_date = str(edge.get("date") or "")[:10]
+        for record in getattr(self.planner, "provided_results", []) or []:
+            tool = record.get("tool_name")
+            if tool not in {_RAIL, "china_rail__get-interline-tickets"}:
+                continue
+            result = record.get("result") or {}
+            if not result.get("success"):
+                continue
+            args = record.get("arguments") or {}
+            if str(args.get("date") or "")[:10] != wanted_date:
+                continue
+            source = args.get("fromStation") or args.get("from") or ""
+            target = args.get("toStation") or args.get("to") or ""
+            if not city_matches(source, edge["origin"]) or not city_matches(target, edge["destination"]):
+                continue
+            self.train_options(
+                edge,
+                result.get("data") or {},
+                {
+                    "tool": tool,
+                    "url": result.get("source_url") or "",
+                    "fetched_at": result.get("fetched_at"),
+                    "result_id": result.get("result_id"),
+                    "validation": "saved_provider_response",
+                },
+            )
+            if edge["options"]:
+                return True
+        return False
+
     def rail(self, edge):
+        if self.saved_rail(edge):
+            return True
         values = {
             "date": edge["date"],
             "fromStation": edge["from"]["name"],
@@ -404,7 +517,12 @@ class _Research:
             "sortFlag": "duration",
         }
         data, evidence = self.call(edge, _RAIL, values)
+        self.train_options(edge, data, evidence)
+        return bool(edge["options"])
+
+    def train_options(self, edge, data, evidence):
         trains = records(data, "trains") or records(data, "items") or records(data, "options")
+        seen = {(item.get("name"), item.get("seat"), item.get("price")) for item in edge["options"]}
         for train in trains:
             seats = train.get("prices") or []
             if not isinstance(seats, list):
@@ -424,22 +542,25 @@ class _Research:
                     train.get("arrive_time"),
                     train.get("duration") or train.get("lishi"),
                 )
-                edge["options"].append(
-                    _option(
-                        edge,
-                        "rail",
-                        "quote",
-                        evidence,
-                        name=train.get("start_train_code") or "Train",
-                        price=price,
-                        currency="CNY",
-                        price_basis="per_person",
-                        availability="available",
-                        bookable=True,
-                        seat=seat.get("seat_name"),
-                        **timing,
-                    )
+                option = _option(
+                    edge,
+                    "rail",
+                    "quote",
+                    evidence,
+                    name=train.get("start_train_code") or "Train",
+                    price=price,
+                    currency="CNY",
+                    price_basis="per_person",
+                    availability="available",
+                    bookable=True,
+                    seat=seat.get("seat_name"),
+                    **timing,
                 )
+                key = (option.get("name"), option.get("seat"), option.get("price"))
+                if key in seen:
+                    break
+                edge["options"].append(option)
+                seen.add(key)
                 break
             if len(edge["options"]) >= 3:
                 break
@@ -697,7 +818,7 @@ class _Research:
         for edge in self.edges:
             if not edge["date"] or not edge["origin"] or not edge["destination"]:
                 continue
-            if edge["mode"] == "rail" and self.domestic(edge):
+            if edge["mode"] == "rail" and self.rail_capable(edge):
                 target = date.fromisoformat(edge["date"])
                 if target < date.today():
                     self.gap(edge, "Past travel date; live availability lookup skipped.")

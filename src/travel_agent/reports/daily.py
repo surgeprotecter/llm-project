@@ -124,8 +124,10 @@ def build_days(planner, points, transport):
                 if location:
                     day.update(city=location["name"], city_id=location["id"], area=location["name"], stay_city=None, no_hotel=True)
             departure_minute = minute(departure["departure_time"])
-            end = max(0, min(end, departure_minute - 180))
-            airport_deadline = end
+            transfer_mode = str(departure.get("mode") or "flight").lower()
+            buffer = 180 if transfer_mode == "flight" else 60
+            end = max(0, min(end, departure_minute - buffer))
+            airport_deadline = end if transfer_mode == "flight" else airport_deadline
             if departure_minute < 6 * 60:
                 entry_city = planner.geo["cities"][0]
                 day.update(
@@ -246,6 +248,11 @@ def build_days(planner, points, transport):
                 planner.on_days(days[:day_index + 1])
             continue
         if end - start < 90:
+            if departure.get("departure_time") and day["date"] == str(departure["departure_time"])[:10]:
+                day["timing_warning"] = (
+                    f"返程 {str(departure['departure_time'])[-5:]} 出发，最后一天只剩赶车时间；"
+                    "如需当天游览，请改乘更晚班次，或把景点前移到前一天。"
+                )
             day.update(
                 type="transfer",
                 title=f"{day['city']} · 抵离与接驳",

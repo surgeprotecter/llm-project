@@ -437,6 +437,18 @@ class RuntimeEngine:
             stalled = int(state.get("stalled_batches", 0) or 0)
             if rounds >= self.settings.max_execute_rounds or stalled >= 4:
                 fallback = saved_progress_reply(state)
+                rendered = self.auto_render(state)
+                if rendered:
+                    itinerary = build_itinerary(state)
+                    body = render_chat(itinerary) if itinerary is not None and itinerary.days else fallback
+                    answer = f"{body}\n\n报告已生成并保存：`{rendered.get('html_path')}`"
+                    self.event(state, "agent.execution_budget_exhausted",
+                               {"planner_round": rounds, "stalled_batches": stalled,
+                                "has_digest": bool(fallback), "auto_rendered": rendered.get("version")})
+                    return self.finish(state, {}, answer, {
+                        "decision": "pass",
+                        "delivery_note": "执行轮次达到上限，自动完成报告渲染。",
+                    })
                 self.event(state, "agent.execution_budget_exhausted",
                            {"planner_round": rounds, "stalled_batches": stalled,
                             "has_digest": bool(fallback)})
@@ -711,6 +723,13 @@ class RuntimeEngine:
                     changes["itinerary"] = itinerary.model_dump(mode="json")
             if report_allowed(scope):
                 answer = receipt(self.db.latest_report(state["trip_id"]), verdict.get("delivery_note"))
+                plan = copy.deepcopy(changes.get("task_plan") or state.get("task_plan") or [])
+                if any(t.get("status") != "completed" for t in plan):
+                    # The report is delivered, so open plan items are settled even if
+                    # the loop stopped before the model updated each one.
+                    plan = [{**t, "status": "completed"} for t in plan]
+                    changes["task_plan"] = plan
+                    self.progress("plan", {"goal": state.get("active_goal"), "tasks": plan})
             elif reply_task_ready(scope, state.get("task_plan", [])):
                 delivery = ToolExecution(thread_id=state["thread_id"], tool_name="deliver_reply",
                     arguments={"plan_version": approval.get("version")},
@@ -1210,6 +1229,36 @@ class RuntimeEngine:
                 self.save(state, trip)
             return result
         raise ValueError("未知内部能力")
+
+    def auto_render(self, state):
+        """Render a report from the saved workspace when the loop hits its budget."""
+        workspace = state.get("report_workspace") or {}
+        if workspace.get("rendered") or not (workspace.get("data") or {}).get("days"):
+            return None
+        stored = self.db.get_trip(state["trip_id"])
+        trip = TripState.model_validate(
+            state.get("trip_state") or (stored.model_dump() if stored else {})
+        )
+        trip.user_id, trip.trip_id, trip.thread_id = (
+            state["user_id"], state["trip_id"], state["thread_id"],
+        )
+        args = {"operation": "render", "request": "按已完成的往返交通与逐日安排生成 HTML 报告"}
+
+        def checkpoint(ws):
+            state["report_workspace"] = ws
+            self.save(state, trip)
+
+        try:
+            result, ws = report_operation(
+                self.db, self.registry, self.gateway, self.renderer, trip,
+                workspace, args, checkpoint=checkpoint,
+                route_contract=(state.get("plan_approval") or {}).get("route_contract"),
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort, fall back to the digest
+            self.event(state, "report.auto_render_failed", {"error": str(exc)[:200]})
+            return None
+        state["report_workspace"] = ws
+        return result if result.get("success") else None
 
     def reference_exists(self, state, reference):
         if reference.startswith("workspace:"):

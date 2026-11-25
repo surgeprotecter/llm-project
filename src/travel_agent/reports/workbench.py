@@ -207,7 +207,8 @@ def report_operation(database, tools, gateway, renderer, trip, workspace, args, 
     seen = {r["result"].get("result_id") or r.get("execution_id") for r in planner.provided_results}
     for item in database.runtime.index(trip.thread_id, limit=300):
         if item["result_id"] not in seen and item["tool"] in {
-            "booking__booking_search", "google_flights__search_flights", "xiaohongshu__get_feed_detail", "web_search"
+            "booking__booking_search", "google_flights__search_flights", "xiaohongshu__get_feed_detail", "web_search",
+            "china_rail__get-tickets", "china_rail__get-interline-tickets"
         } and item["success"]:
             record = database.runtime.result(trip.thread_id, item["result_id"])
             if record:
@@ -256,7 +257,22 @@ def report_operation(database, tools, gateway, renderer, trip, workspace, args, 
         if planner.geo.get("entry_mode") not in {None, "none"} and trip.origin and not any(
             t.get("scope") == "external" and t.get("options") for t in transport
         ):
-            missing.append("出发地往返交通尚未关联报告")
+            unconfirmed = [
+                t for t in transport
+                if t.get("scope") == "external" and t.get("date") and t.get("gaps")
+            ]
+            if unconfirmed:
+                # P3: keep going with an explicitly unconfirmed segment instead of blocking the
+                # whole turn; the report labels it 待确认 and the next turn can still refine it.
+                for item in unconfirmed:
+                    note = (
+                        f"{item.get('origin')} → {item.get('destination')} 交通尚未确认（"
+                        + "；".join(str(g) for g in item.get("gaps", [])[:2]) + "）"
+                    )
+                    planner.issues.append(note)
+                    data.setdefault("warnings", []).append(note)
+            else:
+                missing.append("出发地往返交通尚未关联报告")
         pairs = {(t.get("origin_id"), t.get("destination_id")) for t in transport
                  if t.get("scope") == "intercity" and t.get("options")}
         missing += [f"{a['name']} → {b['name']}城际交通" for a, b in zip(cities, cities[1:])
@@ -299,8 +315,24 @@ def report_operation(database, tools, gateway, renderer, trip, workspace, args, 
         if not cities:
             return {"success": False, "next": "targets未对应现有城市，请使用城市名称或ID"}, workspace
         purpose = args.get("purpose", "all")
-        pending = [c for c in cities if not planner.research_progress.get(c["id"], {}).get("completed")
-                   or purpose in {"food", "repair", "coverage_repair"}]
+
+        def _has_points(city):
+            return any(p.get("city_id") == city["id"] for p in points)
+
+        def _stale(city):
+            progress = planner.research_progress.get(city["id"], {})
+            return (
+                progress.get("completed")
+                and not _has_points(city)
+                and not progress.get("empty_retry")
+            )
+
+        pending = [
+            c for c in cities
+            if not planner.research_progress.get(c["id"], {}).get("completed")
+            or purpose in {"food", "repair", "coverage_repair"}
+            or (purpose == "all" and _stale(c))
+        ]
         for city in pending[:1]:
             existing = [p for p in points if p.get("city_id") == city["id"]]
             notes, new, extra = research_city(
@@ -308,7 +340,13 @@ def report_operation(database, tools, gateway, renderer, trip, workspace, args, 
             )
             points = [p for p in points if p.get("city_id") != city["id"]] + new
             insights += extra
-            planner.research_progress[city["id"]].update(completed=True, phase="completed", places=len(new))
+            planner.research_progress[city["id"]].update(
+                completed=True, phase="completed", places=len(new), empty_retry=not new
+            )
+            if not new:
+                planner.issues.append(
+                    f"{city['name']} 未取得可用候选点位，景点检索需要复核地图服务或换关键词。"
+                )
             data.update(notes=notes, places=points, insights=insights)
             save_progress()
         data.update(notes=notes, places=points, insights=insights)

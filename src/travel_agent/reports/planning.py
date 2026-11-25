@@ -11,7 +11,7 @@ import itertools
 import json
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from travel_agent.models import EvidenceItem, ToolResult
 from travel_agent.reports.context_policy import model_view, stage_requirements
@@ -85,6 +85,55 @@ def main_pois(name, pois):
         return (base != target, not main_name, annex, len(title))
 
     return sorted(candidates, key=score)
+
+
+_STATION_ALIASES = {
+    "香港": "香港西九龙",
+    "香港特别行政区": "香港西九龙",
+    "北京": "北京西",
+    "上海": "上海虹桥",
+    "广州": "广州南",
+    "深圳": "深圳北",
+    "成都": "成都东",
+    "重庆": "重庆北",
+    "西安": "西安北",
+    "杭州": "杭州东",
+    "南京": "南京南",
+    "长沙": "长沙南",
+}
+
+
+def _station_candidates(city):
+    """12306 needs real station names; big cities have several, so try the main hub first."""
+    name = str(city or "").strip()
+    values = [name]
+    alias = _STATION_ALIASES.get(name.removesuffix("市"))
+    if alias and alias not in values:
+        values.insert(0, alias)
+    return [v for v in values if v]
+
+
+def _station_matches(city, station):
+    """12306 returns station names (香港西九龙, 北京西); accept city-prefixed stations."""
+    left = str(city or "").strip().removesuffix("市")
+    right = str(station or "").strip()
+    if not left or not right:
+        return False
+    return left == right or right.startswith(left) or left.startswith(right)
+
+
+def _rail_minutes(train, departure, arrival):
+    value = str(train.get("lishi") or "")
+    match = re.fullmatch(r"(\d+):([0-5]\d)", value)
+    if match:
+        return int(match[1]) * 60 + int(match[2])
+    try:
+        start = datetime.fromisoformat(f"2000-01-01T{departure}")
+        end = datetime.fromisoformat(f"2000-01-01T{arrival}")
+        minutes = int((end - start).total_seconds() // 60)
+        return minutes + 24 * 60 if minutes < 0 else minutes
+    except ValueError:
+        return None
 
 
 class ResearchBase:
@@ -374,57 +423,71 @@ class ResearchBase:
         return notes
 
     def rail(self, origin, destination, when):
-        returning = bool(
-            destination == self.trip.origin
-            and self.trip.travel_dates.end_date
-            and when == self.trip.travel_dates.end_date.isoformat()
-        )
-        data = self.call(
-            "china_rail__get-tickets",
-            {
-                "date": when,
-                "fromStation": origin,
-                "toStation": destination,
-                "trainFilterFlags": "GD",
-                "sortFlag": "startTime",
-                "limitedNum": 0,
-                "earliestStartTime": 16 if returning else 8,
-                "latestStartTime": 20 if returning else 12,
-                "format": "json",
-            },
-        )
         options = []
-        trains = records(data, "items") or records(data, "options")
+        trains = []
+        for from_station in _station_candidates(origin):
+            for to_station in _station_candidates(destination):
+                data = self.call(
+                    "china_rail__get-tickets",
+                    {
+                        "date": when,
+                        "fromStation": from_station,
+                        "toStation": to_station,
+                        "trainFilterFlags": "GD",
+                        "sortFlag": "startTime",
+                        "limitedNum": 0,
+                        "earliestStartTime": 5,
+                        "latestStartTime": 23,
+                        "format": "json",
+                    },
+                )
+                trains = records(data, "items") or records(data, "options")
+                if trains:
+                    break
+            if trains:
+                break
         trains.sort(
             key=lambda t: (
-                t.get("from_station") != origin,
-                t.get("to_station") != destination,
+                not _station_matches(origin, t.get("from_station")),
+                not _station_matches(destination, t.get("to_station")),
                 str(t.get("start_time", "")),
             )
         )
         for train in trains:
-            if not re.fullmatch(
-                re.escape(origin.removesuffix("市")) + r"(?:东|西|北|南|虹桥)?",
-                str(train.get("from_station", "")),
-            ):
+            if not _station_matches(origin, train.get("from_station")):
                 continue
-            if not re.fullmatch(
-                re.escape(destination.removesuffix("市")) + r"(?:东|西|北|南|虹桥)?",
-                str(train.get("to_station", "")),
-            ):
+            if not _station_matches(destination, train.get("to_station")):
                 continue
             seats = [
                 p
-                for p in train.get("prices", [])
+                for p in (train.get("prices") or [])
                 if p.get("seat_name") == "二等座" and p.get("num") not in ("无", "0", "--")
             ]
+            if not seats:
+                seats = [
+                    p
+                    for p in (train.get("prices") or [])
+                    if p.get("price") and p.get("num") not in ("无", "0", "--")
+                ]
             seat = seats[0] if seats else {}
+            departure = str(train.get("start_time") or "")
+            arrival = str(train.get("arrive_time") or "")
+            arrival_date = when
+            if departure and arrival and arrival < departure:
+                arrival_date = (
+                    date.fromisoformat(str(when)[:10]) + timedelta(days=1)
+                ).isoformat()
             options.append(
                 {
                     **train,
+                    "mode": "rail",
                     "route": f"{train.get('start_train_code', '高铁')} · {train.get('from_station', origin)} → {train.get('to_station', destination)}",
-                    "departure_time": train.get("start_time"),
-                    "durationText": f"{train.get('start_time', '')}–{train.get('arrive_time', '')} · {train.get('lishi', '')}",
+                    "departure_date": when,
+                    "arrival_date": arrival_date,
+                    "departure_time": departure,
+                    "arrival_time": arrival,
+                    "duration_minutes": _rail_minutes(train, departure, arrival),
+                    "durationText": f"{departure}–{arrival} · {train.get('lishi', '')}",
                     "price": seat.get("price"),
                     "currency": "CNY",
                     "price_basis": "二等座 / 人",
@@ -437,6 +500,6 @@ class ResearchBase:
             "destination": destination,
             "date": when,
             "options": options[:3],
-            "raw_summary": "未取得满足站点与时段条件的高铁候选，需补查。" if not options else "",
+            "raw_summary": "未取得满足站点条件的高铁候选，需补查。" if not options else "",
             "url": "https://www.12306.cn/index/",
         }

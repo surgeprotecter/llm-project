@@ -61,6 +61,8 @@ def external_transport(planner, skeleton):
     for index, item in enumerate(result):
         item.update(
             id=f"external:{index}",
+            kind="entry" if index == 0 else "exit",
+            mode="rail" if mode == "rail" else "flight" if mode == "flight" else "road",
             scope="external",
             status="quote" if item.get("options") else "unavailable",
         )
