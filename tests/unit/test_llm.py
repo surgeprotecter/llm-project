@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from langchain_core.messages import AIMessage
+
 from travel_agent.config import Settings
 from travel_agent.llm import ModelGateway
+
 
 def test_deepseek_short_tasks_disable_thinking_and_trace_retry(monkeypatch) -> None:
     options = {}

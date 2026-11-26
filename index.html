@@ -201,11 +201,11 @@
             <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
             <span>微调此行程</span>
           </button>
-          <button onclick="exportMarkdownReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition shadow-2xs">
+          <button id="exportMdBtn" onclick="exportMarkdownReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl transition shadow-2xs">
             <i data-lucide="file-text" class="w-3.5 h-3.5 text-slate-500"></i>
             <span>导出 Markdown</span>
           </button>
-          <button onclick="exportHtmlReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition shadow-2xs">
+          <button id="exportHtmlBtn" onclick="exportHtmlReport()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 rounded-xl transition shadow-2xs">
             <i data-lucide="download" class="w-3.5 h-3.5"></i>
             <span>导出精美 HTML 报告</span>
           </button>
@@ -777,6 +777,7 @@ curl -X POST http://localhost:8000/api/chat \
         savePlan();
       }
       renderWorkbench();
+      updateExportButtons();
       lucide.createIcons();
       void refreshPlanFromServer();
     });
@@ -974,6 +975,7 @@ curl -X POST http://localhost:8000/api/chat \
         </div>`;
       if (window.lucide) lucide.createIcons();
       savePlan();
+      updateExportButtons();
     }
 
     function startNewSession() {
@@ -1682,6 +1684,7 @@ curl -X POST http://localhost:8000/api/chat \
     function setDayFilter(day) {
       STATE.activeDayFilter = day;
       renderWorkbench();
+      updateExportButtons();
     }
 
     function getCategoryBadgeStyle(type) {
@@ -1694,6 +1697,17 @@ curl -X POST http://localhost:8000/api/chat \
           return { bg: 'bg-amber-100 text-amber-800', dot: 'border-amber-600' };
         default:
           return { bg: 'bg-slate-100 text-slate-800', dot: 'border-slate-700' };
+      }
+    }
+
+    function updateExportButtons() {
+      const hasPlan = !!STATE.currentPlan;
+      for (const id of ['exportMdBtn', 'exportHtmlBtn']) {
+        const btn = document.getElementById(id);
+        if (!btn) continue;
+        btn.disabled = !hasPlan;
+        btn.classList.toggle('opacity-40', !hasPlan);
+        btn.classList.toggle('cursor-not-allowed', !hasPlan);
       }
     }
 
