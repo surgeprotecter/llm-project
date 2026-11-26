@@ -535,8 +535,11 @@ def render_board(itinerary: Itinerary) -> dict[str, Any]:
             "pricePerNight": int(hotel.price_per_night) if hotel.price_per_night else 0,
             "tags": hotel.tags, "selected": hotel.selected,
         } for hotel in itinerary.hotels],
+        "has_flights": len(itinerary.flights) > 0,
+        "has_hotels": len(itinerary.hotels) > 0,
         "days": days,
     }
+
 
 
 def render_chat(itinerary: Itinerary) -> str:

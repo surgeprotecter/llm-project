@@ -162,10 +162,17 @@ def test_http_url_expands_api_key_and_redacts_it_from_errors(monkeypatch) -> Non
 
     manager = MCPServerManager([config])
 
-    async def fail_with_url(server_config):
-        raise RuntimeError(_resolved_url(server_config))
-
-    manager._discover_server = fail_with_url
+    original_worker = manager._worker
+    def mock_worker(config):
+        worker = original_worker(config)
+        original_request = worker.request
+        def failing_request(operation, arguments):
+            if operation == "list":
+                raise RuntimeError(_resolved_url(config))
+            return original_request(operation, arguments)
+        worker.request = failing_request
+        return worker
+    manager._worker = mock_worker
     assert manager.discover_tools() == []
     assert "<redacted>" in manager.discovery_errors["amap"]
     assert "local-test-key" not in manager.discovery_errors["amap"]

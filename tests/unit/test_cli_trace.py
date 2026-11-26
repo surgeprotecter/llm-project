@@ -51,7 +51,7 @@ def test_full_trace_prints_model_and_tool_io(database, settings, monkeypatch) ->
 
     value = output.getvalue()
     assert value.index("model stage=plan") < value.index("tool name=web_search")
-    for fragment in ("input system", "选择工具", "input human", "去岘港", '"tool_name":"web_search"', '"query": "岘港景点"', "美溪海滩"):
+    for fragment in ("input system", "选择工具", "input human", "去岘港", '"tool_name": "web_search"', '"query": "岘港景点"', "美溪海滩"):
         assert fragment in value
 
 
